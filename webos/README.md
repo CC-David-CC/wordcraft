@@ -20,7 +20,8 @@ Provide a clean component checkout, Rust with its wasm32 target, pinned Trunk 0.
 python3 webos/build.py --output /absolute/new/public/site \
   --cache /absolute/private/build-cache \
   --fonts /absolute/pinned/craft-fonts \
-  --translations /absolute/pinned/craft-i18n
+  --translations /absolute/pinned/craft-i18n \
+  --egui-origin /absolute/local/bare/egui.git
 ```
 
 Use separate `CARGO_HOME`/`RUSTUP_HOME` for a scoped toolchain when desired. This recipe installs no global tools, refuses unknown cache/output collisions, uses external build outputs, verifies all font payload hashes/notices and requires translations/fonts. It packages the complete Trunk WASM/JS graph, extracts the generated initializer unchanged into an external module for the assembly's CSP, includes notices, and records actual file sizes/digests, source/input commits, lockfile hash and tool versions. There is no assumed 1GiB suite or artifact budget in this recipe. Artifact construction, app installation policy, account-file limits, browser cache and resident memory are distinct requirements.
@@ -28,3 +29,12 @@ Use separate `CARGO_HOME`/`RUSTUP_HOME` for a scoped toolchain when desired. Thi
 Browser proof must still cover actual typing, native programmatic edits and undo, saved bytes reopened in another clean context, stale saves, failed/uncertain saves, Save As/export identity, independent instances and lifecycle cleanup. Existing-user staging compatibility and full-suite qualification remain separate gates.
 
 The default `development` profile builds the complete engine with Cargo's development profile and this integration HTML entrypoint. It skips the release-only Binaryen size-optimization pass, preserving codecs, UI, fonts and translations. Use `--profile release` for upstream's release HTML and optimized pipeline. The receipt identifies the actual profile; development/browser acceptance is not optimized-release qualification.
+
+The maintained renderer revision is pinned in the root Cargo manifest and lock.
+Supply `--egui-origin /absolute/local/bare/egui.git` to `build.py`. The provider
+must contain that exact commit. The recipe scopes Cargo's Git transport to this
+provider for this command only; it preserves the canonical upstream identity
+and never edits global Git/SSH configuration or guesses a private server.
+Native Cargo builds use the same maintained revision and can use the environment
+returned by `scoped_egui_environment` to populate their dependency cache.
+The artifact receipt records the egui revision, not a private provider path.

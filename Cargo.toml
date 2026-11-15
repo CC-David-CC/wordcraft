@@ -151,18 +151,18 @@ debug = 0
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
 [patch.crates-io]
 krilla = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "2d0ae4b4270e76c431fd62d3512237579ed6c26f" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

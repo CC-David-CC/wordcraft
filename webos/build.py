@@ -27,6 +27,34 @@ def direct(path):
     return path
 
 
+EGUI_UPSTREAM = 'https://github.com/storytold/egui.git'
+
+
+def egui_revision(source=ROOT):
+    pins = set(re.findall(r'git\s*=\s*"https://github.com/storytold/egui.git"\s*,\s*rev\s*=\s*"([0-9a-f]{40})"', (source / 'Cargo.toml').read_text()))
+    if len(pins) != 1:
+        raise ValueError('Review the source egui pins before building')
+    return pins.pop()
+
+
+def scoped_egui_environment(origin, environment, source=ROOT):
+    """Resolve a maintained revision from an explicit local provider, never global config."""
+    origin = direct(origin)
+    if not origin.is_dir() or git(origin, 'rev-parse', '--is-bare-repository') != 'true':
+        raise ValueError('Explicit self-contained local bare egui origin required')
+    revision = egui_revision(source)
+    git(origin, 'cat-file', '-e', revision + '^{commit}')
+    result = dict(environment)
+    count = int(result.get('GIT_CONFIG_COUNT', '0'))
+    for key, value in [('url.' + origin.as_uri() + '.insteadOf', EGUI_UPSTREAM), ('protocol.file.allow', 'always')]:
+        result['GIT_CONFIG_KEY_' + str(count)] = key
+        result['GIT_CONFIG_VALUE_' + str(count)] = value
+        count += 1
+    result['GIT_CONFIG_COUNT'] = str(count)
+    result['CARGO_NET_GIT_FETCH_WITH_CLI'] = 'true'
+    return result
+
+
 def verify_inputs(fonts, translations, source=ROOT):
     font_pin = re.findall(r'craft-fonts-ref:\s*([0-9a-f]{40})', (source / '.github/workflows/release.yml').read_text())
     translation_pin = (source / 'craft-i18n.rev').read_text().strip()
@@ -42,7 +70,7 @@ def verify_inputs(fonts, translations, source=ROOT):
         asset, notice, digest = fonts / fields[2], fonts / fields[5], fields[6]
         if not asset.resolve().is_relative_to(fonts.resolve()) or asset.is_symlink() or not notice.is_file() or hashlib.sha256(asset.read_bytes()).hexdigest() != digest:
             raise ValueError('Font payload/notice differs from the pinned manifest')
-    return {'craft-fonts': font_pin[0], 'craft-i18n': translation_pin}
+    return {'craft-fonts': font_pin[0], 'craft-i18n': translation_pin, 'egui': egui_revision(source)}
 
 
 class InlineModules(HTMLParser):
@@ -121,6 +149,7 @@ def main():
     parser.add_argument('--cache', type=Path, required=True)
     parser.add_argument('--fonts', type=Path, required=True)
     parser.add_argument('--translations', type=Path, required=True)
+    parser.add_argument('--egui-origin', type=Path, required=True, help='Verified local bare maintained egui fork containing the source-pinned revision')
     parser.add_argument('--profile', choices=['development', 'release'], default='development')
     args = parser.parse_args()
     output, cache = direct(args.output), direct(args.cache)
@@ -152,6 +181,7 @@ def main():
                CRAFT_FONTS_DIR=str(fonts), CRAFT_FONTS_REQUIRED='1', CRAFT_I18N_DIR=str(translations), CRAFT_I18N_REQUIRED='1')
     # Trunk 0.21.14 parses inherited NO_COLOR as a boolean; NO_COLOR=1 fails.
     env.pop('NO_COLOR', None)
+    env = scoped_egui_environment(args.egui_origin, env)
     command = ['trunk', 'build', '--locked', '--skip-version-check', '--color', 'never', '--dist', str(output), '--public-url', './']
     if args.profile == 'release':
         command += ['--release', str(ROOT / 'apps/wordcraft-web/index.html')]
