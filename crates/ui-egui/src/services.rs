@@ -118,4 +118,13 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
 /// [`Services::host_save`]: `(file name, bytes, save_as)`. An error means the page didn't get
 /// the file, and the save failed.
-pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
+pub struct HostSaveContext {
+    /// Exact live document that produced these bytes, captured before host dispatch.
+    pub document: u64,
+    pub revision: u64,
+    pub operation: String,
+    /// This save format becomes the live document source; exports remain copies.
+    pub document_save: bool,
+}
+
+pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool, &HostSaveContext) -> Result<(), String>>;

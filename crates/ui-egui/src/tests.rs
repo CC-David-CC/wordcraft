@@ -4928,7 +4928,7 @@ fn host_app(fail: bool) -> (WordApp, std::rc::Rc<std::cell::RefCell<Vec<(String,
     let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = got.clone();
     a.services.download = Some(Box::new(|_, _| Err("downloads go to the host page".into())));
-    a.services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
+    a.services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool, _: &HostSaveContext| {
         if fail {
             return Err("the page is gone".into());
         }
@@ -8667,4 +8667,89 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
             })
             .drop_without_applying_deltas();
     }
+}
+
+/// Hosted server saves use the same completion tickets as the picker; posting bytes
+/// is not a durable acknowledgement, and failed Save As must retain the source identity.
+fn host_async_app() -> (WordApp, async_saves::AsyncSaves, std::rc::Rc<std::cell::Cell<u64>>) {
+    let (mut a, _) = host_app(false);
+    let saves = async_saves::AsyncSaves::default();
+    let last = std::rc::Rc::new(std::cell::Cell::new(0));
+    let (hook, seen) = (saves.clone(), last.clone());
+    a.services.host_save = Some(Box::new(move |_, _, _, _| {
+        seen.set(hook.start());
+        Ok(())
+    }));
+    a.services.async_saves = Some(saves.clone());
+    host_open(&mut a, "source.docx");
+    (a, saves, last)
+}
+
+#[test]
+fn host_async_save_as_waits_for_confirmation_and_failure_retains_source() {
+    for outcome in [async_saves::SaveOutcome::Cancelled, async_saves::SaveOutcome::Failed("server conflict".into())] {
+        let (mut a, saves, last) = host_async_app();
+        a.execute("file.saveAs", json!({"path": "destination.docx"})).unwrap();
+        assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("source.docx")));
+        assert!(a.document_unsaved());
+        saves.finish(last.get(), outcome);
+        a.settle_async_saves();
+        assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("source.docx")));
+        assert!(a.session.dirty);
+        assert!(body_text(&a).contains("Edited"));
+    }
+}
+
+#[test]
+fn host_async_confirmed_save_as_adopts_path_and_old_reply_cannot_replace_it() {
+    for reverse in [false, true] {
+        let (mut a, saves, last) = host_async_app();
+        a.execute("file.saveAs", json!({"path": "first.docx"})).unwrap();
+        let first = last.get();
+        a.execute("file.saveAs", json!({"path": "second.docx"})).unwrap();
+        let second = last.get();
+        let order = if reverse { [second, first] } else { [first, second] };
+        for ticket in order {
+            saves.finish(ticket, async_saves::SaveOutcome::Saved);
+            a.settle_async_saves();
+        }
+        assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("second.docx")));
+        assert!(!a.document_unsaved());
+    }
+}
+
+#[test]
+fn host_async_dirty_report_stays_unsaved_until_server_confirmation() {
+    let (mut a, saves, last) = host_async_app();
+    let reported = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = reported.clone();
+    a.services.on_dirty = Some(Box::new(move |dirty| seen.set(dirty)));
+    let ctx = egui::Context::default();
+    a.execute("file.save", json!({})).unwrap();
+    control_frame(&mut a, &ctx, true);
+    assert!(reported.get());
+    saves.finish(last.get(), async_saves::SaveOutcome::Saved);
+    control_frame(&mut a, &ctx, true);
+    assert!(!reported.get());
+}
+
+#[test]
+fn host_save_context_identifies_serialized_document_and_copy_semantics() {
+    let (mut a, _) = host_app(false);
+    host_open(&mut a, "source.docx");
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = seen.clone();
+    a.services.host_save = Some(Box::new(move |_, _, _, context| {
+        recorded.borrow_mut().push((context.document, context.revision, context.operation.clone(), context.document_save));
+        Ok(())
+    }));
+    let document = a.session.document_id();
+    a.execute("file.saveAs", json!({"path": "copy.docx"})).unwrap();
+    let revision = a.session.rev();
+    a.execute("file.exportPdf", json!({})).unwrap();
+    let records = seen.borrow();
+    assert_eq!(records[0], (document, revision, "file.saveAs".to_string(), true));
+    assert_eq!(records[1].0, document);
+    assert_eq!(records[1].2, "file.exportPdf");
+    assert!(!records[1].3);
 }

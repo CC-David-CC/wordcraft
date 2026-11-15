@@ -115,7 +115,7 @@ mod state;
 use app::control_click_as_secondary;
 pub(crate) use app::works_without_document;
 pub use clock::now_ms;
-pub use services::{HostSaveFn, Inbox, Services};
+pub use services::{HostSaveContext, HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
 
 /// Web: a save the browser's picker hasn't finished ([`async_saves`]).
@@ -127,6 +127,8 @@ struct SaveInFlight {
     document: u64,
     /// Whether it marked the document saved (a Save in a format that keeps everything).
     marked_saved: bool,
+    /// A hosted Save As adopts its name only after durable acknowledgement.
+    adopt_path: bool,
 }
 
 /// Web: the command a Save Changes prompt holds back until its picker save ends.
@@ -789,6 +791,7 @@ pub struct WordApp {
     autosave_path: Option<std::path::PathBuf>,
     /// Web: saves the browser's picker hasn't finished yet ([`async_saves`], #1315).
     saves_in_flight: Vec<SaveInFlight>,
+    confirmed_host_paths: std::collections::HashMap<u64, u64>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).

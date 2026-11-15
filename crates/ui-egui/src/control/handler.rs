@@ -17,6 +17,17 @@ fn err(e: impl std::fmt::Display) -> Outcome {
 pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
     let r = ctx.input_for(app.active_viewport(), |i| i.content_rect());
     let caret = crate::canvas::caret_screen(app).map(|(p, h)| json!({"x": p.x, "y": p.y, "h": h}));
+    let document_states: Vec<Value> = app
+        .session
+        .documents()
+        .into_iter()
+        .map(|document| {
+            let unsaved = app.document_unsaved_by_id(document.id) || app.document_has_comment_drafts(document.id);
+            let revision = app.session.with_document(document.id, |session| session.rev()).ok();
+            json!({"id": document.id, "revision": revision, "unsaved": unsaved})
+        })
+        .collect();
+    let unsaved_documents: Vec<Value> = document_states.iter().filter(|state| state["unsaved"] == true).map(|state| state["id"].clone()).collect();
     json!({
         "ui": app.prefs(),
         "view": app.session.view,
@@ -32,9 +43,12 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "balloon": app.canvas.balloon,
         "focused": app.canvas.focused,
         "title": app.title_stem(),
-        "dirty": app.session.dirty,
+        "dirty": app.document_unsaved() || app.document_has_comment_drafts(app.session.document_id()),
+        "pendingSaves": app.saves_in_flight.iter().filter(|save| save.document == app.session.document_id()).count(),
         "document": app.session.document_id(),
         "documents": app.session.documents(),
+        "documentStates": document_states,
+        "unsavedDocuments": unsaved_documents,
         "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
     })
 }

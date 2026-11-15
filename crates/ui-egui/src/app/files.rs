@@ -129,7 +129,20 @@ impl WordApp {
             if let Some(i) = self.saves_in_flight.iter().position(|s| s.ticket == ticket) {
                 let save = self.saves_in_flight.swap_remove(i);
                 match &outcome {
-                    async_saves::SaveOutcome::Saved => log::info!("saved {} through the save picker", save.name),
+                    async_saves::SaveOutcome::Saved => {
+                        log::info!("confirmed save of {}", save.name);
+                        // Replies may arrive out of order. An earlier Save As cannot
+                        // replace the path selected by a later confirmed save.
+                        if save.adopt_path && self.confirmed_host_paths.get(&save.document).is_none_or(|last| save.ticket > *last) {
+                            self.confirmed_host_paths.insert(save.document, save.ticket);
+                            let name = std::path::PathBuf::from(&save.name);
+                            if save.document == current {
+                                self.session.path = Some(name);
+                            } else {
+                                let _ = self.session.with_document(save.document, |s| s.path = Some(name));
+                            }
+                        }
+                    }
                     async_saves::SaveOutcome::Cancelled | async_saves::SaveOutcome::Failed(_) => {
                         if save.marked_saved && save.document == current {
                             self.session.dirty = true;

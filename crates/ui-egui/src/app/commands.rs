@@ -178,7 +178,17 @@ impl WordApp {
             let opened_name = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
             let new_file = id == "file.saveAs" || opened_name.as_deref() != Some(name.as_str());
             let delivered = match (&self.services.host_save, &self.services.download) {
-                (Some(host), _) => host(&name, &bytes, marked_saved && new_file),
+                (Some(host), _) => host(
+                    &name,
+                    &bytes,
+                    marked_saved && new_file,
+                    &crate::HostSaveContext {
+                        document: self.session.document_id(),
+                        revision: self.session.rev(),
+                        operation: id.to_string(),
+                        document_save: marked_saved,
+                    },
+                ),
                 (None, Some(download)) => download(&name, &bytes),
                 (None, None) => Ok(()),
             };
@@ -190,17 +200,22 @@ impl WordApp {
             }
             if marked_saved {
                 self.session.dirty = false;
-                // The host page keeps the file under this name now, as a desktop save would.
-                if self.services.host_save.is_some() {
-                    self.session.path = Some(std::path::PathBuf::from(&name));
-                }
             }
             // The browser's picker writes the file later (#1315): until it says how that went,
             // the document's save isn't confirmed.
             if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
                 let document = self.session.document_id();
-                self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
+                self.saves_in_flight.push(SaveInFlight {
+                    ticket,
+                    name: name.clone(),
+                    document,
+                    marked_saved,
+                    adopt_path: marked_saved && self.services.host_save.is_some(),
+                });
                 return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
+            }
+            if marked_saved && self.services.host_save.is_some() {
+                self.session.path = Some(std::path::PathBuf::from(&name));
             }
             return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
         }
