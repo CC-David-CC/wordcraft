@@ -68,6 +68,9 @@ export function mount({instanceId, sessionId, resource = null, files, authority,
         bindings.set(String(result.id), {path: resource.path, sha256: opened.sha256});
       }
       else { await api().request('engine.execute', {command: 'file.new', params: {}}); check(); }
+      // Initial hosting opens the editor canvas explicitly; native file commands
+      // preserve the app's current File/Home presentation.
+      await api().execute('ui.backstage', {value: false}); check();
       await refresh(); phase = 'ready'; status.textContent = resource ? 'Opened account file: ' + resource.path : 'New document; not saved to your account.'; clearTimeout(startup); readyResolve();
     } catch (error) { startupFailed(error); }
   }
