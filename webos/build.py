@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,23 +31,49 @@ def direct(path):
 EGUI_UPSTREAM = 'https://github.com/storytold/egui.git'
 
 
+CRAFT_LIBS_UPSTREAM = 'https://github.com/storytold/craft-libs'
+
+
+def fork_revisions(upstream, source=ROOT):
+    """Read every exact revision for this dependency source, including patches."""
+    pending = [tomllib.loads((source / 'Cargo.toml').read_text())]
+    pins = set()
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get('git') == upstream:
+                revision = value.get('rev')
+                if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+                    raise ValueError('Exact maintained dependency revision required')
+                pins.add(revision)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    if not pins:
+        raise ValueError('Review the source fork pins before building')
+    return sorted(pins)
+
+
 def egui_revision(source=ROOT):
-    pins = set(re.findall(r'git\s*=\s*"https://github.com/storytold/egui.git"\s*,\s*rev\s*=\s*"([0-9a-f]{40})"', (source / 'Cargo.toml').read_text()))
+    pins = fork_revisions(EGUI_UPSTREAM, source)
     if len(pins) != 1:
         raise ValueError('Review the source egui pins before building')
-    return pins.pop()
+    return pins[0]
 
 
-def scoped_egui_environment(origin, environment, source=ROOT):
-    """Resolve a maintained revision from an explicit local provider, never global config."""
+def scoped_fork_environment(origin, upstream, environment, source=ROOT):
+    """Resolve all source revisions from an explicit provider; never global config."""
+    if upstream not in (EGUI_UPSTREAM, CRAFT_LIBS_UPSTREAM):
+        raise ValueError('Known maintained dependency source required')
     origin = direct(origin)
-    if not origin.is_dir() or git(origin, 'rev-parse', '--is-bare-repository') != 'true':
-        raise ValueError('Explicit self-contained local bare egui origin required')
-    revision = egui_revision(source)
-    git(origin, 'cat-file', '-e', revision + '^{commit}')
+    if (not origin.is_dir() or git(origin, 'rev-parse', '--is-bare-repository') != 'true'
+            or (origin / 'objects/info/alternates').exists()):
+        raise ValueError('Explicit self-contained local bare fork origin required')
+    for revision in fork_revisions(upstream, source):
+        git(origin, 'cat-file', '-e', revision + '^{commit}')
     result = dict(environment)
     count = int(result.get('GIT_CONFIG_COUNT', '0'))
-    for key, value in [('url.' + origin.as_uri() + '.insteadOf', EGUI_UPSTREAM), ('protocol.file.allow', 'always')]:
+    for key, value in [('url.' + origin.as_uri() + '.insteadOf', upstream), ('protocol.file.allow', 'always')]:
         result['GIT_CONFIG_KEY_' + str(count)] = key
         result['GIT_CONFIG_VALUE_' + str(count)] = value
         count += 1
@@ -56,11 +83,11 @@ def scoped_egui_environment(origin, environment, source=ROOT):
 
 
 def verify_inputs(fonts, translations, source=ROOT):
-    font_pin = re.findall(r'craft-fonts-ref:\s*([0-9a-f]{40})', (source / '.github/workflows/release.yml').read_text())
+    font_pin = (source / 'webos/craft-fonts.rev').read_text().strip()
     translation_pin = (source / 'craft-i18n.rev').read_text().strip()
-    if len(font_pin) != 1:
-        raise ValueError('Review the source font pin before building')
-    for folder, commit in [(fonts, font_pin[0]), (translations, translation_pin)]:
+    if not re.fullmatch(r'[0-9a-f]{40}', font_pin):
+        raise ValueError('Review the WebOS source font pin before building')
+    for folder, commit in [(fonts, font_pin), (translations, translation_pin)]:
         if git(folder, 'rev-parse', 'HEAD') != commit or git(folder, 'status', '--porcelain'):
             raise ValueError('Build input must be a clean checkout at its source-declared pin')
     for line in (fonts / 'fonts/manifest.txt').read_text().splitlines():
@@ -70,7 +97,7 @@ def verify_inputs(fonts, translations, source=ROOT):
         asset, notice, digest = fonts / fields[2], fonts / fields[5], fields[6]
         if not asset.resolve().is_relative_to(fonts.resolve()) or asset.is_symlink() or not notice.is_file() or hashlib.sha256(asset.read_bytes()).hexdigest() != digest:
             raise ValueError('Font payload/notice differs from the pinned manifest')
-    return {'craft-fonts': font_pin[0], 'craft-i18n': translation_pin, 'egui': egui_revision(source)}
+    return {'craft-fonts': font_pin, 'craft-i18n': translation_pin, 'egui': egui_revision(source), 'craft-libs': fork_revisions(CRAFT_LIBS_UPSTREAM, source)}
 
 
 class InlineModules(HTMLParser):
@@ -150,6 +177,7 @@ def main():
     parser.add_argument('--fonts', type=Path, required=True)
     parser.add_argument('--translations', type=Path, required=True)
     parser.add_argument('--egui-origin', type=Path, required=True, help='Verified local bare maintained egui fork containing the source-pinned revision')
+    parser.add_argument('--craft-libs-origin', type=Path, required=True, help='Verified local bare maintained craft-libs fork containing every source-pinned revision')
     parser.add_argument('--profile', choices=['development', 'release'], default='development')
     args = parser.parse_args()
     output, cache = direct(args.output), direct(args.cache)
@@ -181,7 +209,8 @@ def main():
                CRAFT_FONTS_DIR=str(fonts), CRAFT_FONTS_REQUIRED='1', CRAFT_I18N_DIR=str(translations), CRAFT_I18N_REQUIRED='1')
     # Trunk 0.21.14 parses inherited NO_COLOR as a boolean; NO_COLOR=1 fails.
     env.pop('NO_COLOR', None)
-    env = scoped_egui_environment(args.egui_origin, env)
+    env = scoped_fork_environment(args.egui_origin, EGUI_UPSTREAM, env)
+    env = scoped_fork_environment(args.craft_libs_origin, CRAFT_LIBS_UPSTREAM, env)
     command = ['trunk', 'build', '--locked', '--skip-version-check', '--color', 'never', '--dist', str(output), '--public-url', './']
     if args.profile == 'release':
         command += ['--release', str(ROOT / 'apps/wordcraft-web/index.html')]

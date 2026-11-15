@@ -56,9 +56,10 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        // Arabic interface faces are small, so the web build keeps them too.
-        let small_ui_face = scripts.split(',').any(|s| matches!(s.trim(), "Arab" | "Geor"));
-        if wasm && !small_ui_face {
+        // Keep small interface faces and a real math face in the browser too:
+        // equations must not depend on fonts installed on the user's machine.
+        let small_embedded_face = scripts.split(',').any(|s| matches!(s.trim(), "Arab" | "Geor" | "Zmth"));
+        if wasm && !small_embedded_face {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;

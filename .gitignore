@@ -10,3 +10,5 @@ plan/
 /craft-fonts/
 
 /webos/__pycache__/
+
+/webos/tests/__pycache__/

@@ -2,7 +2,7 @@
 
 The parent owns composition; this maintained fork owns the actual WordCraft engine/UI, its host-save interface and this public mount entrypoint. Upstream native/CLI organization, history and licenses remain intact. The selected upstream baseline is preserved on `webos/integration`; functional work is on `webos/rebuild`. No publication or production deployment is authorized.
 
-The parent-selected baseline `0d48f9a1bd5a2bb88d8431760a14b0ba55161563` passed actual WASM authoring, account save/reopen, stale-save and formatting checks, including two rounds of three concurrent editor starts on the designated ksu.codes test deployment. That qualification does not automatically cover later fork changes. The explicit-caller changes described below have eight focused host-boundary tests and passed the local account/conflict browser workflow using the previously verified, unchanged native WASM. They are not yet parent-selected or deployed; a newly source-pinned artifact remains required. Full browser qualification and whole-suite status belong to the parent assembly's deployment record.
+The parent assembly records qualification of its exact selected component commit and artifact. Later fork changes require a new source-pinned artifact and browser checks; earlier hosted results do not qualify them automatically. Full browser qualification and whole-suite status belong to the parent assembly and deployment record.
 
 ## Real save completion
 
@@ -40,14 +40,15 @@ the lint threshold or modify the native expressions to hide that result.
 
 ## Complete browser assets
 
-Provide a clean component checkout, Rust with its wasm32 target, pinned Trunk 0.21.14, and clean font/translation checkouts at the pins declared by upstream's release workflow and `craft-i18n.rev`:
+Provide a clean component checkout, Rust with its wasm32 target, pinned Trunk 0.21.14, and clean font/translation checkouts at the pins declared by `webos/craft-fonts.rev` and `craft-i18n.rev`:
 
 ```sh
 python3 webos/build.py --output /absolute/new/public/site \
   --cache /absolute/private/build-cache \
   --fonts /absolute/pinned/craft-fonts \
   --translations /absolute/pinned/craft-i18n \
-  --egui-origin /absolute/local/bare/egui.git
+  --egui-origin /absolute/local/bare/egui.git \
+  --craft-libs-origin /absolute/local/bare/craft-libs.git
 ```
 
 Use separate `CARGO_HOME`/`RUSTUP_HOME` for a scoped toolchain when desired. This recipe installs no global tools, refuses unknown cache/output collisions, uses external build outputs, verifies all font payload hashes/notices and requires translations/fonts. It packages the complete Trunk WASM/JS graph, extracts the generated initializer unchanged into an external module for the assembly's CSP, includes notices, and records actual file sizes/digests, source/input commits, lockfile hash and tool versions. There is no assumed 1GiB suite or artifact budget in this recipe. Artifact construction, app installation policy, account-file limits, browser cache and resident memory are distinct requirements.
@@ -64,3 +65,14 @@ and never edits global Git/SSH configuration or guesses a private server.
 Native Cargo builds use the same maintained revision and can use the environment
 returned by `scoped_egui_environment` to populate their dependency cache.
 The artifact receipt records the egui revision, not a private provider path.
+
+
+The WebOS font pin selects the maintained shared font repository independently
+of upstream release workflow configuration. Its STIX Two Math face is embedded
+in native and browser builds, so equation glyphs and OpenType MATH layout do not
+require an installed system math font. The upstream font bytes, license and
+provenance live in craft-fonts. The normal asset receipt includes its notice.
+
+The craft-libs provider must contain every revision selected from that source,
+including the maintained craft-update fix. Both provider mappings are scoped to
+the build subprocess; canonical public URLs and exact revisions stay in Cargo.
