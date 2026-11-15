@@ -83,14 +83,25 @@ export function mount({instanceId, sessionId, resource = null, files, authority,
   }
   window.addEventListener('message', message, {signal: abort.signal});
   const startup = setTimeout(() => { if (phase === 'loading' && !disposed) startupFailed(Error('WordCraft startup timed out.')); }, 120000);
-  async function execute(request, candidate = authority) {
+  async function execute(request, candidate) {
+    // Public callers must supply their capability. A missing caller must never
+    // inherit the human capability retained for this view's own controls.
+    if (candidate === undefined || candidate === null) throw Error('Explicit caller authorization required.');
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw Error('Exact editor instance, session and document target required.');
+    // Capture before any await so authorization and dispatch cannot observe
+    // different commands, targets or arguments from a mutable caller request.
+    const rawRequest = JSON.stringify(request);
+    if (typeof rawRequest !== 'string' || rawRequest.length > 65536) throw Error('Command request exceeds the bounded metadata contract.');
+    const captured = JSON.parse(rawRequest);
     await ready; check();
-    if (!request || request.instanceId !== instanceId || request.sessionId !== sessionId || typeof request.documentId !== 'string' || !/^[0-9]+$/.test(request.documentId)) throw Error('Exact editor instance, session and document target required.');
-    const binding = bindings.get(request.documentId), resourceId = binding?.path || 'draft:' + request.documentId;
-    if (request.resourceId !== resourceId || await authorize(candidate, {instanceId, sessionId, documentId: request.documentId, resourceId, operation: request.command}) !== true) throw Error('Document operation is unavailable or denied.');
-    check(); const rawArgs = JSON.stringify(request.args || {}); if (rawArgs.length > 65536) throw Error('Command arguments exceed the bounded metadata contract.'); const args = JSON.parse(rawArgs), doc = Number(request.documentId); if (!Number.isSafeInteger(doc)) throw Error('Invalid document identity.');
-    const result = request.command === 'document.inspect' ? await api().request('document.inspect', {...args, doc})
-      : await api().request('engine.execute', {command: request.command, params: args, doc});
+    if (captured.instanceId !== instanceId || captured.sessionId !== sessionId || typeof captured.documentId !== 'string' || !/^[0-9]+$/.test(captured.documentId) || typeof captured.command !== 'string') throw Error('Exact editor instance, session and document target required.');
+    const binding = bindings.get(captured.documentId), resourceId = binding?.path || 'draft:' + captured.documentId;
+    if (captured.resourceId !== resourceId || await authorize(candidate, {instanceId, sessionId, documentId: captured.documentId, resourceId, operation: captured.command}) !== true) throw Error('Document operation is unavailable or denied.');
+    check();
+    if ((bindings.get(captured.documentId)?.path || 'draft:' + captured.documentId) !== resourceId) throw Error('Document resource changed while authorization was pending.');
+    const args = captured.args || {}, doc = Number(captured.documentId); if (!Number.isSafeInteger(doc)) throw Error('Invalid document identity.');
+    const result = captured.command === 'document.inspect' ? await api().request('document.inspect', {...args, doc})
+      : await api().request('engine.execute', {command: captured.command, params: args, doc});
     check();
     if (result?.pendingSave) { const saved = await completion('wordcraft-save-' + result.pendingSave).promise; check(); await refresh(); return saved; }
     await refresh(); return result;
@@ -113,7 +124,7 @@ export function mount({instanceId, sessionId, resource = null, files, authority,
     const choice = await askClose(); check(); if (choice === 'cancel') return false; if (choice === 'discard') { const after = await refresh(); if (JSON.stringify(before.documentStates) !== JSON.stringify(after.documentStates)) { status.textContent = 'Documents changed while confirming. Review them before closing.'; return false; } return true; }
     try {
       for (const documentId of unsaved.length ? unsaved : [String(before.document)]) {
-        await execute({instanceId, sessionId, documentId, resourceId: bindings.get(documentId)?.path || 'draft:' + documentId, command: 'file.save'});
+        await execute({instanceId, sessionId, documentId, resourceId: bindings.get(documentId)?.path || 'draft:' + documentId, command: 'file.save'}, authority);
       }
       const after = await refresh(); return !after.dirty && !after.pendingSaves && !(after.unsavedDocuments || after.documents.filter(doc => doc.dirty)).length;
     } catch (error) { if (!disposed) status.textContent = 'The editor stays open: ' + error.message; return false; }

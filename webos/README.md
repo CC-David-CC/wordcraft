@@ -2,7 +2,7 @@
 
 The parent owns composition; this maintained fork owns the actual WordCraft engine/UI, its host-save interface and this public mount entrypoint. Upstream native/CLI organization, history and licenses remain intact. The selected upstream baseline is preserved on `webos/integration`; functional work is on `webos/rebuild`. No publication or production deployment is authorized.
 
-The current changes are not yet browser-qualified or selected by the parent. A successful WASM check is not an editor acceptance test. Twelve host-save tests and eighteen web/picker/layout engine tests pass, along with the required-input WASM check. Full browser artifact and actual editor acceptance are recorded separately in private migration evidence and remain in progress.
+The parent-selected baseline `0d48f9a1bd5a2bb88d8431760a14b0ba55161563` passed actual WASM authoring, account save/reopen, stale-save and formatting checks, including two rounds of three concurrent editor starts on the designated ksu.codes test deployment. That qualification does not automatically cover later fork changes. The explicit-caller changes described below have eight focused host-boundary tests and passed the local account/conflict browser workflow using the previously verified, unchanged native WASM. They are not yet parent-selected or deployed; a newly source-pinned artifact remains required. Full browser qualification and whole-suite status belong to the parent assembly's deployment record.
 
 ## Real save completion
 
@@ -11,6 +11,32 @@ The native `Services::host_save` hook now receives `HostSaveContext` with the ex
 Pending saves keep dirty inspection and host notifications unsaved. Save As adopts its source name after successful acknowledgement; failure retains its original identity, and out-of-order replies cannot replace a later confirmed path. Copies/exports keep the source identity. Existing picker and synchronous embedding behavior remain separate paths with retained tests in the same engine.
 
 The public `@webos/wordcraft` entrypoint mounts synchronously, with explicit readiness/failure/cancellation. Its async inspector reads the actual native command interface. Operations require exact instance, account-session, native document and resource identities, plus an authorized caller. Human controls and public commands use the same engine. The current parent human authority is not delegated agent authentication; that gate remains pending. Same-origin framing is a lifecycle boundary for trusted code, not a hostile-code sandbox.
+
+`view.execute(request, callerCapability)` requires an explicit capability; omission
+never substitutes the human capability retained by the view. The bounded JSON
+request is captured before readiness or authorization waits. Authorization and
+engine dispatch use that same command, target and argument snapshot. A resource
+rebound by Save As while authorization waits invalidates the pending target.
+The close dialog passes its human capability explicitly through the same command
+entrypoint and still waits for durable storage confirmation.
+
+Run the dependency-free host-boundary regression tests with Node24:
+
+```sh
+node --experimental-vm-modules --test webos/tests/view_authorization.test.mjs
+```
+
+These tests load the real mount module with a synthetic DOM/engine. They cover
+caller/target refusal, command capture during async authorization, per-operation
+policy, resource rebinding, disposal and human close-save. They do not qualify
+native document fidelity, server delegation, or an agent transport.
+
+The required `cargo xtask ci` attempt with Rust/Clippy1.95 passed formatting,
+then stopped on three `nonminimal_bool` diagnostics in unchanged native source:
+`crates/engine/src/cmd/insert/items.rs` and
+`crates/engine/src/cmd/page/fit_page.rs`. Later CI steps did not run. These are
+retained baseline findings, not a full CI pass; this host change does not lower
+the lint threshold or modify the native expressions to hide that result.
 
 ## Complete browser assets
 
