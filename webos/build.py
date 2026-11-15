@@ -56,7 +56,7 @@ class InlineModules(HTMLParser):
         self.modules = []
         self.feed(text)
 
-    def offset(self):
+    def source_offset(self):
         row, column = self.getpos()
         return self.lines[row - 1] + column
 
@@ -67,13 +67,13 @@ class InlineModules(HTMLParser):
         if 'src' not in attrs:
             if attrs.get('type') != 'module':
                 raise ValueError('Unexpected inline script; review its build ownership')
-            start = self.offset()
+            start = self.source_offset()
             self.pending = (start, start + len(self.get_starttag_text()))
 
     def handle_endtag(self, tag):
         if tag == 'script' and self.pending:
             start, content = self.pending
-            self.modules.append((start, self.offset() + len('</script>'), self.text[content:self.offset()]))
+            self.modules.append((start, self.source_offset() + len('</script>'), self.text[content:self.source_offset()]))
             self.pending = None
 
 
@@ -130,6 +130,7 @@ def main():
     if git(ROOT, 'status', '--porcelain'):
         parser.error('Commit/review component changes before building reproducible artifacts')
     verify_inputs(fonts, translations)
+    source_commit = git(ROOT, 'rev-parse', 'HEAD')
     for executable in ['cargo', 'rustc', 'trunk']:
         if not shutil.which(executable):
             parser.error('Required build tool unavailable: ' + executable)
@@ -159,6 +160,8 @@ def main():
         # optimization pass on every development rebuild. No codec/font/UI is removed.
         command += ['--cargo-profile', 'dev', str(ROOT / 'webos/index.html')]
     subprocess.run(command, cwd=ROOT / 'apps/wordcraft-web', env=env, check=True)
+    if git(ROOT, 'rev-parse', 'HEAD') != source_commit or git(ROOT, 'status', '--porcelain'):
+        raise RuntimeError('Source changed during the build; preserve outputs as unqualified and build a reviewed commit')
     receipt = finalize(output, fonts, translations, profile=args.profile)
     print(json.dumps({'component': 'wordcraft', 'output': str(output), 'totalBytes': receipt['totalBytes'], 'files': len(receipt['files'])}))
 
