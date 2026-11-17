@@ -1,5 +1,8 @@
 # Where WordCraft falls short of Word
 
+> **WebOS output follow-up — 2026-11-17 (under qualification):** Browser Save/Save As/export navigation now waits for delivery acknowledgement. PDF printing reports asynchronous load/print failures; the hosted print policy and one-line status footer are being qualified. Upstream parity estimates are unchanged. See `webos/README.md`.
+
+
 > **WebOS follow-up — 2026-11-17:** Shaded style contrast, available-font menu choices and account-backed blank-document defaults are under qualification on the maintained fork. See `webos/README.md`; upstream parity estimates and backlog priorities are unchanged.
 
 

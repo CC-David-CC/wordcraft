@@ -61,13 +61,14 @@ async function fixture({authorize: policy, dirty = false, write, read, list, hos
   };
   const document = Object.assign(new EventTarget(), {body, createElement(tag) {
     const node = new Element();node.tagName=tag;
-    if (tag === 'iframe') { frame = node; node.contentWindow = {wordcraft: engine,
+    if (tag === 'iframe') { frame = node; node.contentWindow = {wordcraft: engine, focus() {},
       postMessage(data) { replies.push(data);if (['wordcraft:saved','wordcraft:save-result'].includes(data.type)) {stateDirty = stateRevision!==(serialized.get(data.id)??stateRevision);pendingSaves=0;}if(data.type==='wordcraft:save-failed')pendingSaves=0; }}; }
     return node;
   }});
   const context = vm.createContext({document, window, location: {href: origin + '/', origin},
     URL, AbortController, DOMException, setTimeout, clearTimeout, structuredClone, Blob,
-    ArrayBuffer, Uint8Array, TextEncoder, TextDecoder, btoa, queueMicrotask, crypto:webcrypto});
+    ArrayBuffer, Uint8Array, TextEncoder, TextDecoder, btoa, queueMicrotask, crypto:webcrypto,
+    MutationObserver:class {observe() {} disconnect() {}}});
   const source = await readFile(new URL('../index.mjs', import.meta.url), 'utf8');
   const module = new vm.SourceTextModule(source, {context});
   await module.link(async specifier => {
@@ -363,4 +364,29 @@ test('a failed native status update cannot relabel confirmed defaults as a faile
   const saved=await f.view.execute({...f.request,command:'design.setDefault',args:{}},f.authority);
   assert.equal(saved.committed,true);assert.equal(f.writes.length,1);
   assert.equal(f.calls.some(c=>c.args?.command==='ui.hostDefaultsResult'&&c.args.params.saved===false),false);
+});
+
+test('selected-page PDF uses authorized host storage and never rebinds the document', async t => {
+  const resource={path:'Documents/Source.docx',sha256:'b'.repeat(64)};
+  const f=await fixture({resource,dirty:true}); t.after(()=>f.view.dispose());
+  const before=f.view.fileBinding.snapshot();
+  f.emit({type:'wordcraft:save',id:'wordcraft-save-98',documentId:'1',revision:'1',name:'Pages.pdf',
+    bytes:new ArrayBuffer(8),operation:'file.printPdf',saveAs:false,documentSave:false,path:'Documents/Pages.pdf'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.writes.length,1);
+  assert.equal(f.writes[0].path,'Documents/Pages.pdf');
+  assert.equal(f.writes[0].bytes.size,8);
+  assert(f.decisions.some(d=>d.request.operation==='file.printPdf'&&d.request.resourceId===resource.path));
+  assert.equal(f.replies.at(-1).type,'wordcraft:saved');
+  assert.deepEqual(f.view.fileBinding.snapshot(),before);
+});
+
+test('public editor focus restores native caret focus without a save or resource change', async t => {
+  const f=await fixture();t.after(()=>f.view.dispose());
+  const before=f.view.fileBinding.snapshot();
+  assert.equal(f.view.focus(),true);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert(f.calls.some(c=>c.method==='ui.focus'&&c.args.doc===1));
+  assert.equal(f.writes.length,0);
+  assert.deepEqual(f.view.fileBinding.snapshot(),before);
 });

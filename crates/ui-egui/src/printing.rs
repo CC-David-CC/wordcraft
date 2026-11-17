@@ -5,10 +5,17 @@ pub use craft_ui::printing::{Discover, Duplex, Feedback, Printer, Settings, Stat
 /// Native submission adds WordCraft's PDF-page collation setting and spooler options to the shared spooler settings.
 pub type Submit = Box<dyn Fn(Vec<u8>, Settings, bool, Vec<(String, String)>) -> std::sync::mpsc::Receiver<Result<String, String>>>;
 
+/// The PDF frame loads asynchronously; its load/print errors must reach the same UI state.
+pub type BrowserSubmit = Box<dyn Fn(&[u8]) -> Result<std::sync::mpsc::Receiver<Result<String, String>>, String>>;
+
 /// Metadata for the app-owned commands. Inspecting it never discovers printers or submits.
 pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
     use serde_json::json;
-    let enabled = if app.services.print_native.is_some() { app.printing.ready() } else { app.services.print.is_some() };
+    let enabled = if app.services.print_native.is_some() {
+        app.printing.ready()
+    } else {
+        !app.printing.busy() && (app.services.print.is_some() || app.services.print_async.is_some())
+    };
     let submit_params = "pagesPerSheet?: 1|2|4|6|9|16|booklet|bookletReverse; range?: all|current|selection|custom; pages?: string (1-3,5); parity?: all|odd|even; copies?: integer 1..999; collate?: bool; orientation?: auto|portrait|landscape; paper?: none|Letter|Legal|A4|… (Layout › Size names: Scale to paper size, every page scaled onto that paper and centred; the document is unchanged). Native uses the selected printer, duplex and grayscale from ui.printSettings; omitted copies/collation use current settings. Browser printing opens its dialog. Submits only when explicitly executed.";
     vec![
         json!({"id":"ui.printSettings", "label":"Print settings", "location":"File › Print", "shortcut":null,
@@ -130,6 +137,18 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
     }
 }
 
+/// Browser acceptance is not proof of a spooled or physically printed job.
+pub(crate) fn app_feedback(app: &crate::WordApp, message: &Feedback) -> String {
+    if app.services.print_async.is_some() {
+        match message {
+            Feedback::Submitting => return tl!("Preparing print dialog…").to_string(),
+            Feedback::Submitted(_) => return tl!("Print dialog requested.").to_string(),
+            _ => {}
+        }
+    }
+    feedback(message, |label| crate::i18n::t(label).to_owned())
+}
+
 /// `ui.printCancel`: stop the job being submitted before it reaches the spooler. A job can wait
 /// a long time on a sleeping network printer's driver (#5710) with the print settings locked;
 /// once cancelled it is never sent, so the panel is free again at once: printer list and
@@ -174,8 +193,11 @@ pub fn pwg_media(paper: &str) -> Option<&'static str> {
 /// Build the upstream page-range/markup PDF and hand it to the chosen host print flow.
 pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     use serde_json::json;
-    if app.services.print.is_none() && app.services.print_native.is_none() {
+    if app.services.print.is_none() && app.services.print_async.is_none() && app.services.print_native.is_none() {
         return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
+    }
+    if app.printing.busy() {
+        return Err("A print request is already active.".into());
     }
     let native = app.services.print_native.is_some();
     if native && !app.printing.ready() {
@@ -243,6 +265,10 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
             }
             app.printing.begin(submit(bytes, settings, collate, print_options)).map_err(|_| "A print job is already being submitted.".to_owned())?;
             app.print_feedback_seen = None;
+        } else if let Some(print) = &app.services.print_async {
+            let receiver = print(&bytes)?;
+            app.printing.begin(receiver).map_err(|_| "A print request is already active.".to_owned())?;
+            app.print_feedback_seen = None;
         } else if let Some(print) = &app.services.print {
             print(&bytes)?;
         }
@@ -250,8 +276,19 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
     });
     match result {
         Ok(len) => {
-            app.status(if native { tl!("Submitting print job…") } else { tl!("Opening print dialog…") });
-            Ok(json!({"printing": true, "bytes": len, "pending": native}))
+            let pending = native || app.services.print_async.is_some();
+            app.status(if native {
+                tl!("Submitting print job…")
+            } else if pending {
+                tl!("Preparing print dialog…")
+            } else {
+                tl!("Print dialog requested.")
+            });
+            if !pending && app.ui.backstage && app.ui.backstage_page == "print" {
+                app.ui.backstage = false;
+                app.canvas.want_focus = true;
+            }
+            Ok(json!({"printing": true, "bytes": len, "pending": pending}))
         }
         Err(error) => {
             log::error!("print failed: {error}");

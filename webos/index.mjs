@@ -15,18 +15,25 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
   const source = new URL(url, location.href); if (source.origin !== location.origin) throw Error('This WordCraft integration requires same-origin trusted code.');
   source.searchParams.set('host', 'parent'); source.searchParams.set('author', displayName); source.searchParams.set('documentHost', '1');
   if (/^[A-Za-z0-9_:-]{1,256}$/.test(profileId)) source.searchParams.set('hostProfile', profileId);
-  const element = document.createElement('div'), frame = document.createElement('iframe'), status = document.createElement('div'), recoveryStatus = document.createElement('div'), retryButton = document.createElement('button');
+  const element = document.createElement('div'), frame = document.createElement('iframe'), statusBar = document.createElement('footer'), status = document.createElement('div'), recoveryStatus = document.createElement('div'), retryButton = document.createElement('button');
   element.className = 'webos-wordcraft'; frame.title = 'WordCraft document'; frame.allow = 'clipboard-read; clipboard-write';
   status.className = 'webos-wordcraft-status'; status.setAttribute('role', 'status'); recoveryStatus.className = 'webos-wordcraft-recovery'; recoveryStatus.setAttribute('role', 'status');
-  retryButton.type = 'button'; retryButton.textContent = 'Retry'; retryButton.hidden = true; element.append(frame, status, recoveryStatus, retryButton);
+  statusBar.className = 'webos-wordcraft-statusbar'; statusBar.append(status, recoveryStatus);
+  retryButton.type = 'button'; retryButton.textContent = 'Retry'; retryButton.hidden = true; element.append(frame, statusBar, retryButton);
   const abort = new AbortController(), bindings = new Map(), completions = new Map(), pendingDocuments = new Set(), listeners = new Set(), bindingListeners = new Set();
+  // Truncation is presentation only: hover and assistive technology retain the
+  // complete current messages, including asynchronous failures and save results.
+  const messageTitles = new MutationObserver(() => {status.title = status.textContent; recoveryStatus.title = recoveryStatus.textContent;});
+  for (const node of [status, recoveryStatus]) messageTitles.observe(node, {childList:true, characterData:true, subtree:true});
   let disposed = false, phase = 'loading', loadError = '', currentDocument = null, nativeState = null, nativeFingerprint = '', lifecycleRevision = 0, loaded = false,
     readyResolve, readyReject, initializing = false, nativeReady = false, paused = false, lease = null, closeIntent = null, timer,
     recoveryState = recovery ? 'ready' : 'unavailable', needsCopy = false, deferredRecovery = false, checkpointTail = Promise.resolve(), checkpointSequence = 0, checkpointRunning = null, checkpointRequested = false, lastCheckpoint = Date.now(), commandPending = 0;
   const ready = new Promise((resolve, reject) => {readyResolve = resolve; readyReject = reject}); ready.catch(() => {});
   const check = () => { if (disposed || abort.signal.aborted) throw new DOMException('Editor view closed.', 'AbortError'); files.check(); };
   const api = () => { check(); const value = frame.contentWindow?.wordcraft; if (!value || typeof value.request !== 'function') throw Error('WordCraft command interface unavailable.'); return value; };
-  const dialogs = createDialogs({element, signal: abort.signal, check, onChange: () => changed()});
+  const dialogs = createDialogs({element, signal: abort.signal, check, onChange: () => changed(),
+    onClose(kind){if(kind==='path'&&!disposed&&loaded&&!paused){try{focusEditor();}catch(error){notify(error);}}}
+  });
   const activeState = () => nativeState?.documents.find(document => document.id === currentDocument);
   const dirty = () => loaded && !!nativeState?.documents.some(document => document.dirty);
   const pending = () => pendingDocuments.size > 0 || !!nativeState?.documents.some(document => document.pendingSaves > 0) || commandPending > 0 || initializing || dialogs.active;
@@ -130,7 +137,7 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
     const done=completion(id);if(done.started)return;done.started=true;let admitted=false;
     try {
       check();
-      if(!loaded||!decimal(documentId)||documentId!==currentDocument||!decimal(message.revision)||!validName(message.name)||!(message.bytes instanceof ArrayBuffer)||message.bytes.byteLength>MAX_FILE||typeof message.saveAs!=='boolean'||typeof message.documentSave!=='boolean'||!['file.save','file.saveAs','file.exportPdf','file.exportPng'].includes(message.operation))throw Error('Invalid identified WordCraft save.');
+      if(!loaded||!decimal(documentId)||documentId!==currentDocument||!decimal(message.revision)||!validName(message.name)||!(message.bytes instanceof ArrayBuffer)||message.bytes.byteLength>MAX_FILE||typeof message.saveAs!=='boolean'||typeof message.documentSave!=='boolean'||!['file.save','file.saveAs','file.exportPdf','file.exportPng','file.printPdf'].includes(message.operation))throw Error('Invalid identified WordCraft save.');
       const original=bindings.get(documentId),resourceId=original?.path||'draft:'+documentId;
       if(await authorize(authority,{instanceId,sessionId,documentId,operation:message.operation,resourceId})!==true)throw Error('Save is not authorized.');
       check();if((bindings.get(documentId)?.path||'draft:'+documentId)!==resourceId)throw Error('Document resource changed during save authorization.');
@@ -347,9 +354,17 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
   retryButton.addEventListener('click',()=>void initialize().catch(notify),{signal:abort.signal});
   const persist=()=>{if(!disposed&&loaded)void checkpoint().catch(()=>{});};
   const visibility=()=>{if(document.hidden)persist();};document.addEventListener('visibilitychange',visibility);window.addEventListener('pagehide',persist);
+  function focusEditor(){
+    check();if(!loaded||dialogs.active||paused)return false;
+    frame.contentWindow.focus();frame.contentDocument?.querySelector('canvas')?.focus();
+    // DOM focus alone does not restore egui's canvas focus after a host dialog.
+    // This affects caret focus only; it never closes File or claims a save.
+    void api().request('ui.focus',{doc:Number(currentDocument)}).catch(notify);
+    return true;
+  }
   function dispose(){
     if(disposed)return;disposed=true;phase='disposed';parentSignal?.removeEventListener('abort',dispose);clearTimeout(startup);clearTimeout(timer);abort.abort();recovery?.close();
-    document.removeEventListener('visibilitychange',visibility);window.removeEventListener('pagehide',persist);listeners.clear();bindingListeners.clear();
+    messageTitles.disconnect();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('pagehide',persist);listeners.clear();bindingListeners.clear();
     readyReject(new DOMException('Editor view closed.','AbortError'));for(const done of completions.values())done.reject(new DOMException('Editor view closed; verify any pending save before retrying.','AbortError'));
     frame.src='about:blank';frame.remove();element.remove();bindings.clear();
   }
@@ -357,7 +372,7 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
   return Object.freeze({element,dispose,ready,execute,requestClose,lifecycle,
     fileBinding:Object.freeze({snapshot:bindingSnapshot,subscribe(listener){if(typeof listener!=='function')throw TypeError('Binding listener required.');bindingListeners.add(listener);return()=>bindingListeners.delete(listener);}}),
     retry:()=>initialize(),checkpoint,
-    focus(){check();if(!loaded||dialogs.active||paused)return false;frame.contentWindow.focus();frame.contentDocument?.querySelector('canvas')?.focus();return true;},
+    focus:focusEditor,
     inspect:async()=>{if(nativeReady&&!disposed)await refresh();return inspect();}
   });
 }

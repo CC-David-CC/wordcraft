@@ -6,7 +6,7 @@ export function canonicalPath(value, {root = false} = {}) {
   return value;
 }
 
-export function createDialogs({element, signal, check, onChange = () => {}}) {
+export function createDialogs({element, signal, check, onChange = () => {}, onClose = () => {}}) {
   let active = null;
   function ask(title, build) {
     check(); if (active) return Promise.reject(Error('Finish the current WordCraft dialog first.'));
@@ -15,7 +15,7 @@ export function createDialogs({element, signal, check, onChange = () => {}}) {
     heading.id = 'wordcraft-dialog-' + crypto.randomUUID(); node.setAttribute('aria-labelledby', heading.id); node.append(heading, body, actions); element.append(node);
     return new Promise(resolve => {
       let settled = false;
-      const finish = value => { if (settled) return; settled = true; signal.removeEventListener('abort', cancel); active = null; node.close(); node.remove(); onChange(); resolve(value); };
+      const finish = value => { if (settled) return; settled = true; signal.removeEventListener('abort', cancel); active = null; node.close(); node.remove(); if(!signal.aborted)onClose(node.dataset.kind); onChange(); resolve(value); };
       const cancel = () => finish(null); active = node; onChange();
       const button = (label, value, action) => {
         const b = document.createElement('button'); b.type = 'button'; b.textContent = label;

@@ -3828,6 +3828,10 @@ fn return_on_the_print_page_prints() {
     h.run_steps(2);
     assert_eq!(printed.get(), 1, "Return printed once");
     assert_eq!(body_text(h.state()), before, "the document is unchanged");
+    assert!(!h.state().ui.backstage, "successful browser printing returns to the document");
+    h.state_mut().run("file.print", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "a separate print gesture starts on Print again");
     // Held down, Return repeats (egui marks a press of a key already down as a repeat): one job.
     let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
     for _ in 0..4 {
@@ -3837,6 +3841,9 @@ fn return_on_the_print_page_prints() {
     h.event(enter(false));
     h.run_steps(1);
     assert_eq!(printed.get(), 2, "a held Return prints once");
+    assert!(!h.state().ui.backstage, "the second successful print also returns to the document");
+    h.state_mut().run("file.print", json!({})).unwrap();
+    h.run_steps(4);
     // The built-in file browser over the page takes Return for itself, even with nothing in it
     // focused: Return there saves or opens, and prints nothing.
     let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
@@ -9077,4 +9084,133 @@ fn hosted_recovery_checks_ui_owned_pending_work_in_a_nonactive_target() {
     assert!(a.session.is_open(target));
     assert_eq!(a.saves_in_flight.len(), 1);
     assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+}
+
+/// WebOS: File actions leave Backstage only after the destination confirms delivery.
+#[test]
+fn web_backstage_output_returns_only_after_success() {
+    for (id, path) in [
+        ("file.save", "Document.docx"),
+        ("file.saveAs", "Other.docx"),
+        ("file.exportPdf", "Copy.pdf"),
+        ("file.exportPng", "Copy.png"),
+        ("file.printPdf", "Pages.pdf"),
+    ] {
+        for outcome in
+            [async_saves::SaveOutcome::Saved, async_saves::SaveOutcome::Cancelled, async_saves::SaveOutcome::Failed("destination refused".into())]
+        {
+            let (mut a, saves, last) = web_picker_app();
+            let page = if id == "file.save" {
+                "home"
+            } else if id == "file.saveAs" {
+                "saveAs"
+            } else {
+                "export"
+            };
+            a.run("ui.backstage", json!({"value": true, "page": page})).unwrap();
+            a.canvas.want_focus = false;
+            a.execute(id, json!({"path": path})).unwrap();
+            assert!(a.ui.backstage, "pending {id} must stay on File");
+            a.settle_async_saves();
+            assert!(a.ui.backstage);
+            let success = outcome == async_saves::SaveOutcome::Saved;
+            saves.finish(last.get(), outcome);
+            a.settle_async_saves();
+            assert_eq!(a.ui.backstage, !success, "{id}: only acknowledged success returns to the document");
+            assert_eq!(a.canvas.want_focus, success);
+            assert_eq!(a.session.dirty, !success || matches!(id, "file.exportPdf" | "file.exportPng" | "file.printPdf"));
+        }
+    }
+}
+
+#[test]
+fn web_backstage_output_completion_does_not_close_another_page_or_document() {
+    for other_document in [false, true] {
+        let (mut a, saves, last) = web_picker_app();
+        a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+        a.execute("file.exportPdf", json!({"path": "Copy.pdf"})).unwrap();
+        if other_document {
+            a.execute("file.new", json!({})).unwrap();
+        }
+        a.run("ui.backstage", json!({"value": true, "page": if other_document { "export" } else { "options" }})).unwrap();
+        a.canvas.want_focus = false;
+        saves.finish(last.get(), async_saves::SaveOutcome::Saved);
+        a.settle_async_saves();
+        assert!(a.ui.backstage, "late completion cannot dismiss a different page or document");
+        assert!(!a.canvas.want_focus);
+    }
+}
+
+/// Browser PDF loading/print is asynchronous, just like native spooler submission.
+#[test]
+fn browser_print_completion_returns_only_after_dialog_acceptance() {
+    for outcome in [Ok(String::new()), Err("browser refused the PDF".to_string())] {
+        let mut a = typed();
+        let sender = std::rc::Rc::new(std::cell::Cell::new(None));
+        let seen = sender.clone();
+        a.services.print_async = Some(Box::new(move |bytes| {
+            assert!(bytes.starts_with(b"%PDF"));
+            let (tx, rx) = std::sync::mpsc::channel();
+            seen.set(Some(tx));
+            Ok(rx)
+        }));
+        a.run("file.print", json!({})).unwrap();
+        a.canvas.want_focus = false;
+        assert_eq!(a.run("ui.print", json!({})).unwrap()["pending"], true);
+        assert!(a.ui.backstage && a.printing.busy());
+        assert!(a.run("ui.print", json!({})).is_err(), "cannot replace the pending PDF frame");
+        let success = outcome.is_ok();
+        sender.take().unwrap().send(outcome).unwrap();
+        a.poll_printing(&egui::Context::default());
+        assert_eq!(a.ui.backstage, !success);
+        assert_eq!(a.canvas.want_focus, success);
+        assert!(a.session.dirty, "printing or cancellation is never a document save");
+        if success {
+            let wording = printing::app_feedback(&a, a.printing.message.as_ref().unwrap());
+            assert!(wording.contains("dialog") && !wording.contains("job"), "{wording}");
+        }
+        if !success {
+            assert!(matches!(&a.printing.message, Some(printing::Feedback::Failed(e)) if e.contains("browser refused")));
+        }
+    }
+}
+
+#[test]
+fn browser_print_completion_does_not_dismiss_another_document() {
+    let mut a = typed();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let receiver = std::cell::Cell::new(Some(rx));
+    a.services.print_async = Some(Box::new(move |_| Ok(receiver.take().unwrap())));
+    a.run("file.print", json!({})).unwrap();
+    a.run("ui.print", json!({})).unwrap();
+    a.execute("file.new", json!({})).unwrap();
+    a.run("file.print", json!({})).unwrap();
+    assert!(a.run("ui.print", json!({})).is_err(), "a refused second print cannot take ownership of the first request");
+    a.canvas.want_focus = false;
+    tx.send(Ok(String::new())).unwrap();
+    a.poll_printing(&egui::Context::default());
+    assert!(a.ui.backstage);
+    assert!(!a.canvas.want_focus);
+}
+
+#[test]
+fn web_print_pdf_delivers_selected_pages_instead_of_claiming_a_file_write() {
+    let mut a = typed();
+    let bytes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = bytes.clone();
+    a.services.download = Some(Box::new(move |name, data| {
+        assert!(name.ends_with(".pdf"));
+        seen.borrow_mut().push(data.to_vec());
+        Ok(())
+    }));
+    assert!(a.execute("file.printPdf", json!({"path":"pages.pdf", "range":"custom", "pages":"99"})).is_err());
+    assert!(bytes.borrow().is_empty());
+    a.execute("file.printPdf", json!({"path":"pages.pdf", "range":"current", "copies":1})).unwrap();
+    a.execute("file.printPdf", json!({"path":"pages.pdf", "range":"current", "copies":3})).unwrap();
+    let seen = bytes.borrow();
+    assert_eq!(seen.len(), 2);
+    assert!(seen.iter().all(|b| b.starts_with(b"%PDF")));
+    assert!(seen[1].len() > seen[0].len(), "copies must affect the delivered print plan");
+    assert!(a.session.dirty);
+    assert!(a.session.path.is_none());
 }

@@ -270,6 +270,9 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         }
         "save" => {
             let r = app.run("file.save", json!({}));
+            if r.as_ref().is_ok_and(|v| v.get("pendingSave").is_some() || v.get("hostRequested").is_some()) {
+                return;
+            }
             if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;

@@ -61,6 +61,9 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print dialog (no download or intermediate file).
     /// Desktop uses `print_native` instead. An error means nothing was opened.
     pub print: Option<Box<dyn Fn(&[u8]) -> Result<(), String>>>,
+    /// Browser: load the generated PDF and report print-dialog invocation later.
+    /// A successful reply means the browser accepted print(), never that a job printed.
+    pub print_async: Option<printing::BrowserSubmit>,
     /// Desktop: the picture on the system clipboard, if any — egui's paste only carries text
     /// (#45). Read when Paste finds no text; see [`paste_picture`].
     pub clipboard_picture: Option<Box<dyn Fn() -> Option<paste_picture::ClipboardPicture>>>,

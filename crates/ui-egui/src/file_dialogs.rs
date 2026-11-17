@@ -333,7 +333,7 @@ impl WordApp {
                 // skips the status bar while Backstage is open. `fail_save_as` reaches both.
                 let result = picked.map(|path| self.run("file.save", json!({"path": path})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
-                if saved {
+                if saved && !matches!(&result, Some(Ok(v)) if v.get("pendingSave").is_some()) {
                     self.ui.backstage = false;
                     self.canvas.want_focus = true;
                     self.clear_save_as_error();

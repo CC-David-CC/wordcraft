@@ -191,11 +191,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::ScrollArea::vertical().id_salt("print_settings").show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
                 let native = app.services.print_native.is_some();
-                let hook = native || app.services.print.is_some();
+                let hook = native || app.services.print.is_some() || app.services.print_async.is_some();
                 // #2958: as in Word, the page's action leads the settings, in the accent the app
                 // gives a dialog's primary button: the first thing seen, and plainly a button
                 // that prints now rather than one more setting in the list below.
-                let ready = !native || app.printing.ready();
+                let ready = if native { app.printing.ready() } else { !app.printing.busy() };
                 // Return prints too, as in Word, whose ⌘P opens on Print as the default button.
                 if hook
                     && (ui.add_enabled(ready, crate::widgets::primary_button(ui, tl!("Print")).min_size(vec2(320.0, 34.0))).clicked()
@@ -215,6 +215,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     app.ui.print.copies = app.printing.settings.copies;
                 } else if hook {
                     ui.label(tl!("Send the document straight to the system print dialog, or save a copy in another format below."));
+                    if let Some(message) = &app.printing.message {
+                        ui.label(crate::printing::app_feedback(app, message));
+                    }
                 } else {
                     ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
                 }

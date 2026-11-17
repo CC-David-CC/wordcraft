@@ -131,6 +131,11 @@ impl WordApp {
                 match &outcome {
                     async_saves::SaveOutcome::Saved | async_saves::SaveOutcome::SavedWithPath(_) => {
                         log::info!("confirmed save of {}", save.name);
+                        // A late save cannot dismiss another document or File page.
+                        if save.document == current && self.ui.backstage && save.backstage_page.as_ref() == Some(&self.ui.backstage_page) {
+                            self.ui.backstage = false;
+                            self.canvas.want_focus = true;
+                        }
                         // Replies may arrive out of order. An earlier Save As cannot
                         // replace the path selected by a later confirmed save.
                         if save.adopt_path && self.confirmed_host_paths.get(&save.document).is_none_or(|last| save.ticket > *last) {
@@ -308,7 +313,7 @@ impl WordApp {
     /// the desktop app writes it, except an import-only Word 97–2003 file (#2445).
     pub(super) fn web_save_name(&self, id: &str) -> String {
         match id {
-            "file.exportPdf" => return format!("{}.pdf", self.title_stem()),
+            "file.exportPdf" | "file.printPdf" => return format!("{}.pdf", self.title_stem()),
             "file.exportPng" => return format!("{}.png", self.title_stem()),
             _ => {}
         }
@@ -355,12 +360,16 @@ impl WordApp {
         else {
             return;
         };
-        let text = printing::feedback(&message, |label| i18n::t(label).to_owned());
+        let text = printing::app_feedback(self, &message);
         self.status(text);
         // Word returns to the document once a print job is away, the same as after Save; a
         // failure stays on the Print page so the error (and the settings to fix it) are visible
         // (#3210: the Print page used to stay up after a successful submission).
-        if matches!(message, printing::Feedback::Submitted(_)) && self.ui.backstage && self.ui.backstage_page == "print" {
+        if matches!(message, printing::Feedback::Submitted(_))
+            && self.print_document == Some(self.session.document_id())
+            && self.ui.backstage
+            && self.ui.backstage_page == "print"
+        {
             self.ui.backstage = false;
             self.canvas.want_focus = true;
         }

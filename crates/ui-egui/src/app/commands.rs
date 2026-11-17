@@ -146,7 +146,7 @@ impl WordApp {
             // cancel pending pickers, change Recent or restart the caret blink.
             return self.session.run(id, &params).map_err(|e| e.to_string());
         }
-        if matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng")
+        if matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng" | "file.printPdf")
             && let Err(error) = panes::flush_comment_drafts(self)
         {
             // A protected comment draft stays unsaved beside the document; it
@@ -184,7 +184,7 @@ impl WordApp {
             return r;
         }
         // Web: saving and exporting use the configured delivery callback.
-        if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
+        if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng" | "file.printPdf") {
             return self.save_or_export_to_host(id, &params);
         }
         let document = self.session.document_id();
@@ -275,7 +275,11 @@ impl WordApp {
     /// retain its completion ticket. Posting bytes is not a save acknowledgement.
     fn save_or_export_to_host(&mut self, id: &str, params: &Value) -> Result<Value, String> {
         let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
-        let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+        let name = if matches!(id, "file.exportPdf" | "file.printPdf") && !name.to_ascii_lowercase().ends_with(".pdf") {
+            format!("{name}.pdf")
+        } else {
+            name
+        };
         // A save with a password encrypts this and later saves (`file.save`'s `password`).
         if matches!(id, "file.save" | "file.saveAs")
             && let Some(pw) = params.get("password").filter(|v| !v.is_null())
@@ -294,7 +298,13 @@ impl WordApp {
         let password =
             if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
         let opts = wordcraft_engine::cmd::file::export_options(&self.session, params);
-        let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+        let bytes = if id == "file.printPdf" {
+            // Preserve the engine's selected ranges, copies and sheet imposition.
+            // The wasm file command has no filesystem: the host must receive bytes.
+            self.session.print_pdf(params).map_err(|e| e.to_string())?.0
+        } else {
+            wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?
+        };
         // A ticket left over from an earlier call isn't this save's.
         let saves = self.services.async_saves.clone();
         if let Some(saves) = &saves {
@@ -346,11 +356,16 @@ impl WordApp {
                 adopt_path: marked_saved && self.services.host_save.is_some(),
                 revision: self.session.rev(),
                 was_dirty,
+                backstage_page: self.ui.backstage.then(|| self.ui.backstage_page.clone()),
             });
             return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
         }
         if marked_saved && self.services.host_save.is_some() {
             self.session.path = Some(std::path::PathBuf::from(&name));
+        }
+        if self.ui.backstage {
+            self.ui.backstage = false;
+            self.canvas.want_focus = true;
         }
         Ok(json!({"downloaded": name, "bytes": bytes.len()}))
     }
@@ -1031,8 +1046,11 @@ impl WordApp {
 
     /// Submit the selected print job; the implementation lives beside its localized controls.
     fn print_to_system(&mut self, p: &Value) -> Result<Value, String> {
-        self.print_document = Some(self.session.document_id());
-        printing::submit(self, p)
+        let result = printing::submit(self, p);
+        if result.is_ok() {
+            self.print_document = Some(self.session.document_id());
+        }
+        result
     }
 
     /// File › Options › General › Make WordCraft the default…: hand over to the host's

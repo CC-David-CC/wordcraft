@@ -260,6 +260,7 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
     let open_inbox = inbox.clone();
     let save_ctx = ctx.clone();
     let font_ctx = ctx.clone();
+    let print_ctx = ctx.clone();
     let font_messages = messages.clone();
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
@@ -297,7 +298,7 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
         async_saves: Some(saves.clone()),
         download: Some(Box::new(move |path: &str, bytes: &[u8]| download(&saves, &save_ctx, path, bytes))),
-        print: Some(Box::new(print_pdf)),
+        print_async: Some(Box::new(move |bytes| print_pdf(bytes, print_ctx.clone()))),
         inbox: Some(inbox),
         on_dirty: Some(Box::new(move |d| dirty.set(d))),
         animations_enabled: Some(animations_enabled()),
@@ -594,10 +595,11 @@ const PRINT_FRAME_ID: &str = "wordcraft-print-frame";
 /// a download or a popup window the browser might block. The previous
 /// print's iframe and object URL are removed first, so only one copy of the
 /// document's PDF stays in the page (the last one may still be printing).
-fn print_pdf(bytes: &[u8]) -> Result<(), String> {
+fn print_pdf(bytes: &[u8], ctx: egui::Context) -> Result<std::sync::mpsc::Receiver<Result<String, String>>, String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
     let document = window.document().ok_or("no document")?;
+    let body = document.body().ok_or("no body")?;
 
     if let Some(old) = document.get_element_by_id(PRINT_FRAME_ID) {
         if let Ok(frame) = old.clone().dyn_into::<web_sys::HtmlIFrameElement>() {
@@ -624,33 +626,56 @@ fn print_pdf(bytes: &[u8]) -> Result<(), String> {
             }
         };
     iframe.set_id(PRINT_FRAME_ID);
-    let attached = iframe
-        .style()
-        .set_property("display", "none")
-        .map_err(js)
-        .and_then(|()| document.body().ok_or_else(|| "no body".to_string()))
-        .and_then(|body| body.append_child(&iframe).map_err(js));
-    if let Err(e) = attached {
+    if let Err(e) = iframe.style().set_property("display", "none").map_err(js) {
+        web_sys::Url::revoke_object_url(&url).ok();
+        return Err(e);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reply = Rc::new(Cell::new(Some(tx)));
+
+    // Both a blocked PDF navigation and a thrown print() must reach the UI. The
+    // timeout also covers browsers that never emit load for a blocked PDF frame.
+    let load_reply = reply.clone();
+    let load_ctx = ctx.clone();
+    let iframe_for_load = iframe.clone();
+    let on_load = wasm_bindgen::closure::Closure::once_into_js(move || {
+        iframe_for_load.set_onload(None);
+        let Some(tx) = load_reply.take() else { return };
+        let result = iframe_for_load
+            .content_window()
+            .ok_or_else(|| "the PDF print frame has no window".to_string())
+            .and_then(|w| w.print().map_err(js))
+            .map(|()| String::new());
+        let _ = tx.send(result);
+        load_ctx.request_repaint();
+    });
+    iframe.set_onload(Some(on_load.unchecked_ref()));
+    let timeout_frame = iframe.clone();
+    let timeout_url = url.clone();
+    let timeout = wasm_bindgen::closure::Closure::once_into_js(move || {
+        if let Some(tx) = reply.take() {
+            // A timeout must not open a surprise dialog when a late load arrives.
+            timeout_frame.set_onload(None);
+            timeout_frame.remove();
+            web_sys::Url::revoke_object_url(&timeout_url).ok();
+            let _ = tx.send(Err("The PDF print frame did not load. Check browser permissions and the site's frame policy.".into()));
+            ctx.request_repaint();
+        }
+    });
+    // Register before attaching: the initial about:blank load is not our PDF.
+    if let Err(e) = window.set_timeout_with_callback_and_timeout_and_arguments_0(timeout.unchecked_ref(), 25_000).map_err(js) {
+        iframe.set_onload(None);
+        web_sys::Url::revoke_object_url(&url).ok();
+        return Err(e);
+    }
+    iframe.set_src(&url);
+    if let Err(e) = body.append_child(&iframe).map_err(js) {
+        iframe.set_onload(None);
         iframe.remove();
         web_sys::Url::revoke_object_url(&url).ok();
         return Err(e);
     }
-
-    // `onload` fires once the PDF has actually rendered inside the iframe;
-    // printing before that would show a blank page. Set the handler BEFORE
-    // `src` so a fast/cached load can't fire before we're listening.
-    let iframe_for_load = iframe.clone();
-    let on_load = wasm_bindgen::closure::Closure::once_into_js(move || {
-        if let Some(w) = iframe_for_load.content_window() {
-            // Ignore errors: some browsers (notably Firefox with a built-in
-            // PDF viewer) print fine but report a benign cross-origin-style
-            // error back on this call.
-            let _ = w.print();
-        }
-    });
-    iframe.set_onload(Some(on_load.unchecked_ref()));
-    iframe.set_src(&url);
-    Ok(())
+    Ok(rx)
 }
 
 fn mime_for(name: &str) -> &'static str {

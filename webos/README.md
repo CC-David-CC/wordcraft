@@ -194,3 +194,33 @@ account-scoped browser store and are not copied into the defaults record.
 
 The record is capped at 256 KiB and 512 styles. Existing source and artifact
 qualification remain separate; the parent release report records actual acceptance.
+
+## Output completion and browser print (under qualification)
+
+The host footer keeps account-save and local-recovery messages on one line, with
+ellipsis for narrow windows and complete hover text. These remain distinct states.
+
+Native asynchronous save/export tickets retain their originating document and
+Backstage page. Only successful delivery returns that page to the document and
+restores editor focus; cancellation, failure, another document or another page
+cannot be dismissed by a late reply. A synchronous embedding uses its successful
+callback as the delivery boundary. Save As paths still adopt only on durable host
+acknowledgement, and exports neither rebind the source nor clear unsaved edits.
+
+`file.printPdf` now hands the engine's selected-page/copy/imposition PDF bytes to
+the same host storage path as other exports. The wasm engine's filesystem-free
+file command alone cannot persist a PDF. Hosts must accept this explicit operation
+in their save protocol; it remains an export with no document binding change.
+
+The browser uses optional `Services::print_async` to load its PDF frame and report
+actual `print()` invocation or failure through the existing print-state receiver.
+Pending requests cannot replace the active PDF. A blocked/failed/timed-out frame
+stays on Print with its error; success returns to the printed document if it is
+still shown. Browser acceptance never means a physical print job succeeded: the
+browser owns printer selection and cancellation. The last PDF frame is replaced
+on the next print, and a timed-out frame cannot print later.
+
+The embedding server must permit `blob:` frames on the WordCraft HTML response.
+The WebOS deployment scopes that exception to `/wordcraft/index.html`, retaining
+`object-src 'none'` and the existing desktop/other-app CSP. Do not disable CSP or
+open arbitrary script/object/frame origins to get printing working.

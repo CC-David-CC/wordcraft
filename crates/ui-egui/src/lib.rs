@@ -131,6 +131,8 @@ struct SaveInFlight {
     adopt_path: bool,
     revision: u64,
     was_dirty: bool,
+    /// Return from the originating File page only after confirmed delivery.
+    backstage_page: Option<String>,
 }
 
 /// Web: the command a Save Changes prompt holds back until its picker save ends.

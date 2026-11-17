@@ -1,5 +1,8 @@
 # UI parity with Microsoft Word
 
+> **WebOS output follow-up — 2026-11-17 (under qualification):** Browser Save/Save As/export navigation now waits for delivery acknowledgement. PDF printing reports asynchronous load/print failures; the hosted print policy and one-line status footer are being qualified. Upstream parity estimates are unchanged. See `webos/README.md`.
+
+
 > **WebOS integration update — 2026-11-16:** The maintained fork adds opt-in host-owned document windows, canonical save acknowledgements, native rich recovery, matching-revision pause leases, and account-scoped browser preferences/fonts. Native host tests and adapter regressions pass; rebuilt WASM and assembled browser qualification are pending. These changes do not revise upstream parity estimates or reprioritize its backlog. See [the integration contract](../webos/README.md).
 
 
