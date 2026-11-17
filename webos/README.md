@@ -4,6 +4,21 @@ The parent owns composition; this maintained fork owns the actual WordCraft engi
 
 The parent assembly records qualification of its exact selected component commit and artifact. Later fork changes require a new source-pinned artifact and browser checks; earlier hosted results do not qualify them automatically. Full browser qualification and whole-suite status belong to the parent assembly and deployment record.
 
+## Save As Browse and export qualification
+
+Hosted File › Save As › Browse dispatches the same account-owned command as F12.
+The host asks for a relative account path including the filename; cancellation
+changes no file or document identity, and only the server acknowledgement adopts
+the destination. The standalone desktop/browser file-dialog route is unchanged.
+Native tests click Browse itself and each of the thirteen export buttons. The
+parent records the exact rebuilt WASM and account-delivery qualification.
+
+Export writers for DOCX, the two XML dialects, ODT/OTT/FODT and RTF currently use
+Save As semantics: a confirmed write changes the active document identity and
+clears the saved revision. PDF, PNG, HTML, Markdown, LaTeX and text remain copies.
+Export menu naming still uses the standalone suggested-name route. These are
+known separate integration gaps; file generation is not a full-fidelity guarantee.
+
 ## Document-host contract under qualification
 
 The current document behavior changes are source implementation in progress.

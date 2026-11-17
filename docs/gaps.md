@@ -1,5 +1,8 @@
 # Where WordCraft falls short of Word
 
+> **WebOS Save As Browse follow-up — 2026-11-17 (under qualification):** Hosted File › Save As › Browse now dispatches the same account-owned `file.saveAs` request as F12. Standalone file dialogs retain their existing behavior. Native button regressions cover destination ownership and all thirteen export writers; assembled account delivery is qualified separately by the parent. Export to DOCX, either XML dialect, ODT/OTT/FODT and RTF still has Save As identity semantics; that separate limitation is not fixed by this change. Upstream parity estimates are unchanged.
+
+
 > **WebOS output follow-up — 2026-11-17 (under qualification):** Browser Save/Save As/export navigation now waits for delivery acknowledgement. PDF printing reports asynchronous load/print failures; the hosted print policy and one-line status footer are being qualified. Upstream parity estimates are unchanged. See `webos/README.md`.
 
 

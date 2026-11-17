@@ -859,6 +859,64 @@ fn save_as_page_shows_browse_and_no_open_list() {
     assert!(h.query_by_label("Recent").is_none(), "Save As has no list that opens documents");
 }
 
+/// The hosted Browse button must ask for an account destination, just like F12.
+/// Merely testing file.saveAs bypasses the button's legacy file-dialog route.
+#[test]
+fn hosted_save_as_browse_uses_account_picker() {
+    use std::{cell::RefCell, rc::Rc};
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let received = requests.clone();
+    let legacy = Rc::new(RefCell::new(0));
+    let picked = legacy.clone();
+    let downloaded = legacy.clone();
+    let services = Services {
+        host_document: Some(Box::new(move |request| {
+            received.borrow_mut().push(request.clone());
+            Ok(())
+        })),
+        pick_save: Some(Box::new(move |name| {
+            *picked.borrow_mut() += 1;
+            Some(name.to_owned())
+        })),
+        download: Some(Box::new(move |_, _| {
+            *downloaded.borrow_mut() += 1;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Keep this writing"));
+    session.path = Some("Documents/Original.docx".into());
+    session.run("text.insert", &json!({"text": "Unsaved edit. "})).unwrap();
+    let document = session.document_id().to_string();
+    let revision = session.rev().to_string();
+    let text = session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    let mut app = WordApp::new(session, services);
+    app.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    let requests = requests.borrow();
+    assert_eq!(requests.len(), 1, "Browse must request the host's account chooser");
+    let request = &requests[0];
+    assert_eq!(request.command, "file.saveAs");
+    assert_eq!(request.document, document);
+    assert_eq!(request.revision, revision);
+    assert_eq!(request.params, json!({}));
+    assert_eq!(*legacy.borrow(), 0, "no standalone picker or download before choosing an account path");
+    assert_eq!(h.state().session.path.as_deref(), Some(std::path::Path::new("Documents/Original.docx")));
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text);
+    assert!(h.state().session.dirty);
+    assert!(h.state().ui.backstage, "the chooser has not confirmed a save");
+}
+
 #[test]
 fn backstage_save_navigates_to_save_as_when_unnamed() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());

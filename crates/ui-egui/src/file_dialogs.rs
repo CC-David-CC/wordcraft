@@ -369,6 +369,14 @@ impl WordApp {
 
     /// Ask where to save, then save there (File › Save As).
     pub fn save_as_dialog(&mut self) {
+        // Hosted document windows use the same account-owned destination command
+        // as F12. The standalone web picker only returns a suggested filename.
+        if self.services.host_document.is_some() {
+            if let Err(error) = self.run("file.saveAs", json!({})) {
+                self.fail_save_as(&error);
+            }
+            return;
+        }
         let _ = self.save_as(AfterSave::Nothing);
     }
 

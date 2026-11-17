@@ -487,6 +487,82 @@ mod tests {
     use crate::Services;
     use wordcraft_engine::Session;
 
+    /// Every visible export button must produce parseable output, including the
+    /// two XML writers sharing an extension. This is a small-document smoke
+    /// test, not a claim of arbitrary-document formatting fidelity.
+    #[test]
+    fn export_buttons_write_usable_files() {
+        use egui_kittest::kittest::Queryable;
+        use std::{cell::RefCell, rc::Rc};
+        for (label, ext, roundtrip) in [
+            ("PDF document (*.pdf)", "pdf", false),
+            ("Word document (*.docx)", "docx", true),
+            ("Word XML Document (*.xml)", "xml", true),
+            ("Word 2003 XML Document (*.xml)", "wordml2003", true),
+            ("OpenDocument Text (*.odt)", "odt", true),
+            ("OpenDocument Text Template (*.ott)", "ott", true),
+            ("Flat OpenDocument Text (*.fodt)", "fodt", true),
+            ("Rich Text Format (*.rtf)", "rtf", true),
+            ("Web page (*.html)", "html", true),
+            ("Markdown (*.md)", "md", true),
+            ("LaTeX (*.tex)", "tex", false),
+            ("Plain text (*.txt)", "txt", true),
+            ("Page image (*.png)", "png", false),
+        ] {
+            let output = Rc::new(RefCell::new(Vec::new()));
+            let received = output.clone();
+            let services = Services {
+                pick_save: Some(Box::new(|name| Some(name.to_owned()))),
+                download: Some(Box::new(move |name, bytes| {
+                    received.borrow_mut().push((name.to_owned(), bytes.to_vec()));
+                    Ok(())
+                })),
+                ..Default::default()
+            };
+            let mut session = Session::new(wordcraft_doc::Document::from_text("Synthetic export heading\nSynthetic export paragraph"));
+            session.path = Some("Source.docx".into());
+            session.run("select.text", &json!({"text": "Synthetic export heading"})).unwrap();
+            session.run("format.bold", &json!({})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 1200.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    export_formats(app, ui);
+                },
+                WordApp::new(session, services),
+            );
+            h.run_steps(4);
+            h.get_by_label(label).click();
+            h.run_steps(4);
+            let output = output.borrow();
+            assert_eq!(output.len(), 1, "{label}: exactly one output");
+            let (name, bytes) = &output[0];
+            assert!(!bytes.is_empty(), "{label}: nonempty output");
+            if roundtrip {
+                let document = wordcraft_engine::io::open_bytes(name, bytes).unwrap_or_else(|e| panic!("{label}: {e}"));
+                let text = document.plain_text(wordcraft_doc::StoryRef::Body);
+                assert!(text.contains("Synthetic export heading"), "{label}: heading survives reopening");
+                assert!(text.contains("Synthetic export paragraph"), "{label}: paragraph survives reopening");
+            } else if ext == "pdf" {
+                assert!(bytes.starts_with(b"%PDF-"));
+            } else if ext == "png" {
+                assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+            } else {
+                assert_eq!(ext, "tex");
+                assert!(String::from_utf8_lossy(bytes).contains("Synthetic export paragraph"));
+            }
+            if ext == "xml" || ext == "wordml2003" {
+                let xml = String::from_utf8_lossy(bytes);
+                let namespace = if ext == "xml" {
+                    "http://schemas.microsoft.com/office/2006/xmlPackage"
+                } else {
+                    "http://schemas.microsoft.com/office/word/2003/wordml"
+                };
+                assert!(xml.contains(namespace), "{label}: the chosen XML dialect");
+            }
+        }
+    }
+
     /// Print Markup changes layout and pixels without changing the document revision.
     #[test]
     fn preview_refreshes_layout_and_texture_when_print_markup_toggles() {
