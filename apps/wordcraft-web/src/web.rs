@@ -596,7 +596,17 @@ const PRINT_FRAME_ID: &str = "wordcraft-print-frame";
 /// print's iframe and object URL are removed first, so only one copy of the
 /// document's PDF stays in the page (the last one may still be printing).
 fn print_pdf(bytes: &[u8], ctx: egui::Context) -> Result<std::sync::mpsc::Receiver<Result<String, String>>, String> {
-    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    // JsValue's Debug representation includes the whole JavaScript/WASM stack.
+    // Show a bounded browser message so a print failure leaves the controls usable.
+    let js = |e: wasm_bindgen::JsValue| {
+        let message = js_sys::Reflect::get(&e, &wasm_bindgen::JsValue::from_str("message"))
+            .ok()
+            .and_then(|v| v.as_string())
+            .or_else(|| e.as_string())
+            .filter(|message| !message.trim().is_empty())
+            .unwrap_or_else(|| "The browser could not open the PDF print dialog.".to_string());
+        message.chars().take(512).collect::<String>()
+    };
     let window = web_sys::window().ok_or("no window")?;
     let document = window.document().ok_or("no document")?;
     let body = document.body().ok_or("no body")?;
