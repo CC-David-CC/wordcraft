@@ -52,6 +52,12 @@ pub struct Services {
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,
+    /// Explicit document metadata for a host's lifecycle/recovery coordinator.
+    /// Never contains document bytes or platform authentication credentials.
+    pub on_document_state: Option<Box<dyn Fn(&HostDocumentState)>>,
+    /// Opt-in external document-window ownership. Interactive New/Open/Close
+    /// ask the host, keeping the current native document and its undo intact.
+    pub host_document: Option<HostDocumentFn>,
     /// Web: hand PDF bytes to the browser's print dialog (no download or intermediate file).
     /// Desktop uses `print_native` instead. An error means nothing was opened.
     pub print: Option<Box<dyn Fn(&[u8]) -> Result<(), String>>>,
@@ -125,6 +131,34 @@ pub struct HostSaveContext {
     pub operation: String,
     /// This save format becomes the live document source; exports remain copies.
     pub document_save: bool,
+    /// Exact path requested by the command, before the transport takes its leaf.
+    pub path: String,
 }
 
 pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool, &HostSaveContext) -> Result<(), String>>;
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostDocumentState {
+    pub active: String,
+    pub documents: Vec<HostDocument>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostDocument {
+    pub id: String,
+    pub revision: String,
+    pub dirty: bool,
+    pub pending_saves: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostDocumentRequest {
+    pub document: String,
+    pub revision: String,
+    pub command: String,
+    pub params: serde_json::Value,
+}
+pub type HostDocumentFn = Box<dyn Fn(&HostDocumentRequest) -> Result<(), String>>;

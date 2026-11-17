@@ -18,6 +18,9 @@ use std::rc::Rc;
 pub enum SaveOutcome {
     /// The file is written and closed.
     Saved,
+    /// A host confirmed the write and its canonical source path. This is
+    /// acknowledgement metadata, never a second save or a filesystem rename.
+    SavedWithPath(String),
     /// The user cancelled the picker; nothing was written.
     Cancelled,
     /// The picker, the write or the close failed (the reason).

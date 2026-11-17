@@ -28,6 +28,21 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.host_pause.is_some() {
+            return Err("This document window is paused while the host ends the session.".into());
+        }
+        if self.services.host_document.is_some() && matches!(id, "file.new" | "file.open" | "file.close" | "ui.openFileDialog") {
+            // These open another host-owned document window, so the current
+            // buffer is not being discarded and must not trigger New/Open's
+            // native replace-document prompt.
+            return self.request_host_document(id, params);
+        }
+        if self.services.host_document.is_some()
+            && params.get("path").and_then(Value::as_str).is_none()
+            && (id == "file.saveAs" || (id == "file.save" && self.session.path.is_none()))
+        {
+            return self.request_host_document("file.saveAs", params);
+        }
         // While Markdown Source is open, Undo and Redo work on its typing, as Ctrl+Z does there.
         if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
             return crate::md_source::undo(self, id == "edit.redo");
@@ -112,6 +127,23 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.check_document_operation(id, self.session.document_id())?;
+        if id == "document.recoverySnapshot" {
+            if let Some(error) = self.document_required_error(id) {
+                return Err(error);
+            }
+            panes::flush_comment_drafts(self)?;
+            // Automatic checkpoints are observations, not user actions. Do not
+            // cancel pending pickers, change Recent or restart the caret blink.
+            return self.session.run(id, &params).map_err(|e| e.to_string());
+        }
+        if matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng")
+            && let Err(error) = panes::flush_comment_drafts(self)
+        {
+            // A protected comment draft stays unsaved beside the document; it
+            // must not prevent saving the accepted native document (#1348).
+            self.status(error);
+        }
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);
@@ -142,82 +174,9 @@ impl WordApp {
             }
             return r;
         }
-        // Web: saving and exporting become downloads.
+        // Web: saving and exporting use the configured delivery callback.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
-            let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
-            let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
-            // A save with a password encrypts this and later saves (`file.save`'s `password`).
-            if matches!(id, "file.save" | "file.saveAs")
-                && let Some(pw) = params.get("password").filter(|v| !v.is_null())
-            {
-                if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
-                    return Err("only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password, and it can't be empty".into());
-                }
-                self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
-            }
-            // A save is a save, download or not: advance the revision and modified stamp (#262).
-            if matches!(id, "file.save" | "file.saveAs") {
-                self.session.stamp_save();
-            }
-            // Word documents are encrypted with the document's password, if it has one.
-            let password =
-                if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
-            let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
-            // A ticket left over from an earlier call isn't this save's.
-            let saves = self.services.async_saves.clone();
-            if let Some(saves) = &saves {
-                let _ = saves.take_started();
-            }
-            // An export is a copy, and so is a save in a format that doesn't keep everything (a
-            // page image, plain text): the document itself still has unsaved changes.
-            let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
-            // Save As tells the host page the document is now this file, which it only is when the
-            // save marks it saved. A Save under a name the page never sent (an untitled document,
-            // an imported .doc saved as .docx) is a new file too, never an overwrite.
-            let opened_name = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
-            let new_file = id == "file.saveAs" || opened_name.as_deref() != Some(name.as_str());
-            let delivered = match (&self.services.host_save, &self.services.download) {
-                (Some(host), _) => host(
-                    &name,
-                    &bytes,
-                    marked_saved && new_file,
-                    &crate::HostSaveContext {
-                        document: self.session.document_id(),
-                        revision: self.session.rev(),
-                        operation: id.to_string(),
-                        document_save: marked_saved,
-                    },
-                ),
-                (None, Some(download)) => download(&name, &bytes),
-                (None, None) => Ok(()),
-            };
-            if let Err(e) = delivered {
-                let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
-                log::error!("download of {name} failed: {e}");
-                self.status(msg.clone());
-                return Err(msg);
-            }
-            if marked_saved {
-                self.session.dirty = false;
-            }
-            // The browser's picker writes the file later (#1315): until it says how that went,
-            // the document's save isn't confirmed.
-            if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
-                let document = self.session.document_id();
-                self.saves_in_flight.push(SaveInFlight {
-                    ticket,
-                    name: name.clone(),
-                    document,
-                    marked_saved,
-                    adopt_path: marked_saved && self.services.host_save.is_some(),
-                });
-                return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
-            }
-            if marked_saved && self.services.host_save.is_some() {
-                self.session.path = Some(std::path::PathBuf::from(&name));
-            }
-            return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
+            return self.save_or_export_to_host(id, &params);
         }
         let document = self.session.document_id();
         let body_epoch = self.session.ime_body_epoch();
@@ -301,6 +260,90 @@ impl WordApp {
             self.status(e.clone());
         }
         r
+    }
+
+    /// Serialize one native revision for the browser/embedding callback and
+    /// retain its completion ticket. Posting bytes is not a save acknowledgement.
+    fn save_or_export_to_host(&mut self, id: &str, params: &Value) -> Result<Value, String> {
+        let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
+        let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+        // A save with a password encrypts this and later saves (`file.save`'s `password`).
+        if matches!(id, "file.save" | "file.saveAs")
+            && let Some(pw) = params.get("password").filter(|v| !v.is_null())
+        {
+            if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
+                return Err("only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password, and it can't be empty".into());
+            }
+            self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
+        }
+        let was_dirty = self.session.dirty;
+        // A save is a save, download or not: advance the revision and modified stamp (#262).
+        if matches!(id, "file.save" | "file.saveAs") {
+            self.session.stamp_save();
+        }
+        // Word documents are encrypted with the document's password, if it has one.
+        let password =
+            if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
+        let opts = wordcraft_engine::cmd::file::export_options(&self.session, params);
+        let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+        // A ticket left over from an earlier call isn't this save's.
+        let saves = self.services.async_saves.clone();
+        if let Some(saves) = &saves {
+            let _ = saves.take_started();
+        }
+        // An export is a copy, and so is a save in a format that doesn't keep everything (a
+        // page image, plain text): the document itself still has unsaved changes.
+        let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+        // Save As tells the host page the document is now this file, which it only is when the
+        // save marks it saved. A Save under a name the page never sent (an untitled document,
+        // an imported .doc saved as .docx) is a new file too, never an overwrite.
+        let opened_name = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        let same_path = self.session.path.as_ref().is_some_and(|path| path.to_string_lossy() == name);
+        let new_file = id == "file.saveAs" || (!same_path && opened_name.as_deref() != Some(name.as_str()));
+        let delivered = match (&self.services.host_save, &self.services.download) {
+            (Some(host), _) => host(
+                &name,
+                &bytes,
+                marked_saved && new_file,
+                &crate::HostSaveContext {
+                    document: self.session.document_id(),
+                    revision: self.session.rev(),
+                    operation: id.to_string(),
+                    document_save: marked_saved,
+                    path: name.clone(),
+                },
+            ),
+            (None, Some(download)) => download(&name, &bytes),
+            (None, None) => Ok(()),
+        };
+        if let Err(e) = delivered {
+            let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
+            log::error!("download of {name} failed: {e}");
+            self.status(msg.clone());
+            return Err(msg);
+        }
+        if marked_saved {
+            self.session.dirty = false;
+        }
+        // The browser's picker writes the file later (#1315): until it says how that went,
+        // the document's save isn't confirmed.
+        if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
+            let document = self.session.document_id();
+            self.saves_in_flight.push(SaveInFlight {
+                ticket,
+                name: name.clone(),
+                document,
+                marked_saved,
+                adopt_path: marked_saved && self.services.host_save.is_some(),
+                revision: self.session.rev(),
+                was_dirty,
+            });
+            return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
+        }
+        if marked_saved && self.services.host_save.is_some() {
+            self.session.path = Some(std::path::PathBuf::from(&name));
+        }
+        Ok(json!({"downloaded": name, "bytes": bytes.len()}))
     }
 
     /// Web: store a font added from bytes, or forget the removed ones ([`Services::store_font`]).
@@ -783,6 +826,29 @@ impl WordApp {
                 self.open_dialog();
                 json!({})
             }
+            "ui.hostPause" => {
+                if self.services.host_document.is_none() {
+                    return Some(Err("Host document coordination is unavailable.".into()));
+                }
+                let Some(lease) = s("lease").filter(|s| !s.is_empty() && s.len() <= 80) else {
+                    return Some(Err("A bounded host pause lease is required.".into()));
+                };
+                if p.get("paused").and_then(Value::as_bool) == Some(true) {
+                    if self.host_pause.is_some()
+                        || self.saves_in_flight.iter().any(|save| save.marked_saved)
+                        || s("document") != Some(self.session.document_id().to_string().as_str())
+                        || s("revision") != Some(self.session.rev().to_string().as_str())
+                    {
+                        return Some(Err("Document changed or has a pending operation; cannot pause.".into()));
+                    }
+                    self.host_pause = Some(lease.to_string());
+                } else if p.get("paused").and_then(Value::as_bool) == Some(false) && self.host_pause.as_deref() == Some(lease) {
+                    self.host_pause = None;
+                } else {
+                    return Some(Err("Host pause lease changed.".into()));
+                }
+                json!({"paused":self.host_pause.is_some()})
+            }
             // File › Save As › Save as Word Template (#2852): the Save dialog for a .dotx, in the
             // user templates folder. Opens system UI, like `ui.openFileDialog`.
             "ui.saveAsTemplate" => {
@@ -911,6 +977,34 @@ impl WordApp {
             }
             _ => return None,
         }))
+    }
+
+    /// Window-level conditions the engine cannot observe: a paused input
+    /// stream, external document-window ownership and unconfirmed UI work.
+    pub(crate) fn check_document_operation(&self, id: &str, document: u64) -> Result<(), String> {
+        if self.host_pause.is_some() && !matches!(id, "ui.hostPause" | "document.inspect" | "document.recoverySnapshot") {
+            return Err("This document window is paused while the host ends the session.".into());
+        }
+        if self.services.host_document.is_some() && id == "view.newWindow" {
+            return Err("This host keeps one window for each editing document.".into());
+        }
+        // The engine checks its clean revision; the UI additionally owns
+        // unconfirmed saves and comment text not yet committed to that model.
+        if id == "document.restoreSnapshot" && (self.document_unsaved_by_id(document) || self.document_has_comment_drafts(document)) {
+            return Err("Finish or save the existing work before recovering a document.".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn request_host_document(&self, command: &str, params: Value) -> Result<Value, String> {
+        let host = self.services.host_document.as_ref().ok_or("Host document coordination is unavailable.")?;
+        host(&crate::HostDocumentRequest {
+            document: self.session.document_id().to_string(),
+            revision: self.session.rev().to_string(),
+            command: command.to_string(),
+            params,
+        })?;
+        Ok(json!({"hostRequested":true}))
     }
 
     /// Submit the selected print job; the implementation lives beside its localized controls.
@@ -1131,6 +1225,9 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "file.newFromTemplate"
             | "file.listTemplates"
             | "file.open"
+            // Restoring a host checkpoint opens a document from the empty
+            // startup window; it must not require one to be open already.
+            | "document.restoreSnapshot"
             | "file.close"
             | "file.options"
             | "file.setAuthor"

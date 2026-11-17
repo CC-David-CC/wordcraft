@@ -590,23 +590,57 @@ fn title_and_account_buttons_work() {
     assert!(h.query_by_label("User name:").is_some());
 }
 
-/// The Options toggle hides the community pill in the title bar; the backstage menu's
-/// Discord link hides with it — one setting, everywhere the link shows.
+/// The maintained app keeps community navigation in About, including when old
+/// preferences still contain the former title-bar toggle.
 #[test]
-fn the_community_button_off_hides_the_backstage_discord_link_too() {
-    use egui_kittest::kittest::Queryable;
-    let mut a = app();
-    a.run("ui.backstage", json!({"value": true})).unwrap();
-    let mut h = harness(a);
-    h.run_steps(2);
-    assert!(h.query_by_label("Discord community").is_some(), "the community link shows by default");
+fn community_navigation_is_confined_to_about() {
+    for old_setting in [true, false] {
+        let mut a = app();
+        a.ui.show_discord = old_setting;
+        a.ui.backstage = true;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert!(h.query_by_label("Discord community").is_none());
+        assert!(h.query_by_label("About").is_some());
+        let about = crate::dialogs::Dialog::open("about", h.state_mut());
+        h.state_mut().dialog = about;
+        h.run_steps(4);
+        assert!(h.query_by_label("Join us on Discord: discord.gg/artcraft").is_some());
+    }
+}
 
+/// The Help ribbon and title bar do not expose community navigation.
+#[test]
+fn help_ribbon_and_title_bar_have_no_discord_control() {
     let mut a = app();
-    a.ui.show_discord = false;
-    a.run("ui.backstage", json!({"value": true})).unwrap();
+    a.run("ui.backstage", json!({"value": false})).unwrap();
+    a.run("ui.tab", json!({"tab": "Help"})).unwrap();
     let mut h = harness(a);
-    h.run_steps(2);
-    assert!(h.query_by_label("Discord community").is_none(), "the backstage link honors the same setting");
+    h.run_steps(4);
+    // Large ribbon controls paint their own labels rather than exposing them
+    // as AccessKit labels. Inspect their real drawing so an empty ribbon or an
+    // inaccessible control cannot make the absence assertions pass vacuously.
+    fn text(shape: &egui::Shape, labels: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => labels.push(t.galley.job.text.clone()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| text(s, labels)),
+            _ => {}
+        }
+    }
+    let mut labels = Vec::new();
+    for shape in &h.output().shapes {
+        text(&shape.shape, &mut labels);
+    }
+    assert_eq!(h.state().ui.tab, "Help");
+    assert!(labels.iter().any(|s| s == "Commands"), "the Help ribbon must actually be rendered: {labels:?}");
+    assert!(!labels.iter().any(|s| s.contains("Discord")), "Help/title controls must be absent: {labels:?}");
 }
 
 /// File › Options › Advanced › Editing: alignment guides are a UI command, on by default and
@@ -4019,7 +4053,7 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
             a,
         );
         h.run_steps(4);
-        assert!(h.query_by_label("Show the community button in the title bar").is_some(), "hook {hook}: the Options page rendered");
+        assert!(h.query_by_label("Show the mini toolbar when text is selected").is_some(), "hook {hook}: the Options page rendered");
         assert_eq!(h.query_by_label(LABEL).is_some(), hook, "hook {hook}: the button");
         if hook {
             h.get_by_label(LABEL).click();
@@ -8752,4 +8786,258 @@ fn host_save_context_identifies_serialized_document_and_copy_semantics() {
     assert_eq!(records[1].0, document);
     assert_eq!(records[1].2, "file.exportPdf");
     assert!(!records[1].3);
+}
+
+#[test]
+fn hosted_document_requests_preserve_the_live_buffer_and_do_not_prompt_for_replacement() {
+    let mut a = typed();
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = requests.clone();
+    a.services.host_document = Some(Box::new(move |request| {
+        recorded.borrow_mut().push(request.clone());
+        Ok(())
+    }));
+    let document = a.session.document_id();
+    let revision = a.session.rev();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    for (command, params) in [
+        ("file.new", json!({"template":"letter"})),
+        ("file.open", json!({"path":"Documents/Other.docx"})),
+        ("ui.openFileDialog", json!({})),
+        ("file.close", json!({})),
+        ("file.saveAs", json!({})),
+    ] {
+        assert_eq!(a.run(command, params).unwrap()["hostRequested"], true);
+        assert_eq!(a.session.document_id(), document);
+        assert_eq!(a.session.rev(), revision);
+        assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+        assert!(a.dialog.is_none());
+    }
+    assert_eq!(requests.borrow().len(), 5);
+    assert!(requests.borrow().iter().all(|r| r.document == document.to_string() && r.revision == revision.to_string()));
+    assert_eq!(requests.borrow()[0].params["template"], "letter");
+    assert!(!crate::widgets::enabled(&a, "view.newWindow"));
+    assert!(a.execute("view.newWindow", json!({})).is_err());
+}
+
+#[test]
+fn hosted_pause_requires_matching_revision_and_lease_and_refuses_mutation() {
+    let mut a = typed();
+    a.services.host_document = Some(Box::new(|_| Ok(())));
+    let document = a.session.document_id().to_string();
+    let revision = a.session.rev().to_string();
+    assert!(a.execute("ui.hostPause", json!({"paused":true,"lease":"test-lease","document":document,"revision":"invalid"})).is_err());
+    a.execute("ui.hostPause", json!({"paused":true,"lease":"test-lease","document":document,"revision":revision})).unwrap();
+    let before = body_text(&a);
+    assert!(a.run("text.insert", json!({"text":"blocked"})).is_err());
+    assert!(a.execute("text.insert", json!({"text":"blocked"})).is_err());
+    assert!(a.execute("ui.hostPause", json!({"paused":false,"lease":"another-lease"})).is_err());
+    assert_eq!(body_text(&a), before);
+    assert!(a.execute("document.recoverySnapshot", json!({})).is_ok());
+    a.execute("ui.hostPause", json!({"paused":false,"lease":"test-lease"})).unwrap();
+    a.run("text.insert", json!({"text":"allowed"})).unwrap();
+    assert!(body_text(&a).contains("allowed"));
+}
+
+#[test]
+fn hosted_state_identifies_each_native_revision_and_pending_save() {
+    let (mut a, saves, last) = host_async_app();
+    let first = a.host_document_state();
+    a.run("text.insert", json!({"text":"Another edit"})).unwrap();
+    let edited = a.host_document_state();
+    assert_eq!(first.active, edited.active);
+    assert_ne!(
+        first.documents.iter().find(|d| d.id == first.active).unwrap().revision,
+        edited.documents.iter().find(|d| d.id == edited.active).unwrap().revision
+    );
+    a.execute("file.save", json!({})).unwrap();
+    let pending = a.host_document_state();
+    let pending_document = pending.documents.iter().find(|d| d.id == pending.active).unwrap();
+    assert_eq!(pending_document.pending_saves, 1);
+    assert!(pending_document.dirty);
+    a.services.host_document = Some(Box::new(|_| Ok(())));
+    assert!(
+        a.execute("ui.hostPause", json!({"paused":true,"lease":"pending-save","document":pending.active,"revision":pending_document.revision}))
+            .is_err()
+    );
+    saves.finish(last.get(), async_saves::SaveOutcome::SavedWithPath("Documents/source.docx".into()));
+    a.settle_async_saves();
+    let settled = a.host_document_state();
+    let settled_document = settled.documents.iter().find(|d| d.id == settled.active).unwrap();
+    assert_eq!(settled_document.pending_saves, 0);
+    assert!(!settled_document.dirty);
+    assert!(settled.documents.iter().any(|d| d.id != settled.active && d.dirty), "a parked document's work stays unsaved");
+}
+
+#[test]
+fn a_failed_clean_host_save_as_keeps_the_original_clean_identity() {
+    let (mut a, saves, last) = host_async_app();
+    a.session.dirty = false;
+    a.execute("file.saveAs", json!({"path":"Documents/Copy.docx"})).unwrap();
+    saves.finish(last.get(), async_saves::SaveOutcome::Failed("synthetic name collision".into()));
+    a.settle_async_saves();
+    assert!(!a.session.dirty);
+    assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("source.docx")));
+    assert!(!a.ui.recent.iter().any(|path| path == "Documents/Copy.docx"));
+}
+
+#[test]
+fn confirmed_host_path_is_canonical_and_does_not_clean_newer_edits() {
+    let (mut a, saves, last) = host_async_app();
+    a.execute("file.saveAs", json!({"path":"Documents/Folder/Copy.docx"})).unwrap();
+    a.run("text.insert", json!({"text":"Newer unsaved edit"})).unwrap();
+    saves.finish(last.get(), async_saves::SaveOutcome::SavedWithPath("Documents/Folder/Copy.docx".into()));
+    a.settle_async_saves();
+    assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("Documents/Folder/Copy.docx")));
+    assert_eq!(a.ui.recent.first().map(String::as_str), Some("Documents/Folder/Copy.docx"));
+    assert!(a.session.dirty);
+    assert!(body_text(&a).contains("Newer unsaved edit"));
+}
+
+#[test]
+fn document_window_host_save_keeps_the_full_account_path() {
+    let (mut a, got) = host_app(false);
+    a.services.host_document = Some(Box::new(|_| Ok(())));
+    host_open(&mut a, "Documents/Folder/report.docx");
+    a.execute("file.save", json!({})).unwrap();
+    let calls = got.borrow();
+    assert_eq!(calls[0].0, "Documents/Folder/report.docx");
+    assert!(!calls[0].1, "ordinary Save does not invent a new resource");
+    assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("Documents/Folder/report.docx")));
+}
+
+#[test]
+fn hosted_initial_document_replaces_its_placeholder_even_when_standalone_start_is_disabled() {
+    let mut a = app();
+    a.ui.start_screen = false;
+    a.services.host_document = Some(Box::new(|_| Ok(())));
+    let placeholder = a.session.document_id();
+    assert!(a.start_screen());
+    a.execute("file.new", json!({})).unwrap();
+    assert_ne!(a.session.document_id(), placeholder);
+    assert!(!a.session.is_open(placeholder));
+    assert_eq!(a.session.documents().len(), 1);
+    assert!(!a.ui.start_screen, "host startup does not overwrite the preference");
+}
+
+#[test]
+fn a_failed_host_save_that_changes_password_protection_remains_dirty() {
+    let (mut a, saves, last) = host_async_app();
+    a.session.dirty = false;
+    a.execute("file.saveAs", json!({"path":"Documents/Private.docx","password":"synthetic-only-fixture"})).unwrap();
+    saves.finish(last.get(), async_saves::SaveOutcome::Failed("synthetic write failure".into()));
+    a.settle_async_saves();
+    assert!(a.session.dirty);
+    assert!(a.session.password.is_some());
+    assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("source.docx")));
+}
+
+/// Recovery is an opening operation, including the host's empty startup window.
+#[test]
+fn hosted_recovery_opens_from_the_empty_startup_window_through_control() {
+    let mut source = app();
+    source.execute("para.heading1", json!({})).unwrap();
+    source.execute("text.insert", json!({"text":"Hosted startup recovery"})).unwrap();
+    let snapshot = source.execute("document.recoverySnapshot", json!({})).unwrap();
+    let mut target = app();
+    target.services.host_document = Some(Box::new(|_| Ok(())));
+    target.ui.start_screen = false;
+    assert!(target.start_screen());
+    assert!(!target.has_document());
+    let placeholder = target.session.document_id();
+    let ctx = egui::Context::default();
+    let (request, _reply) = ControlRequest::new(
+        "engine.execute",
+        json!({
+            "command":"document.restoreSnapshot", "doc":placeholder,
+            "params":{"version":1,"data":snapshot["data"],"expectedRevision":target.session.rev().to_string(),"sourcePath":"Documents/Recovered.docx"}
+        }),
+    );
+    let control::Outcome::Done(result) = control::handle(&mut target, &ctx, &request) else { panic!("recovery replies at once") };
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(target.has_document());
+    assert!(!target.session.is_open(placeholder));
+    assert_eq!(target.session.documents().len(), 1);
+    assert!(target.session.dirty);
+    assert_eq!(target.session.path.as_deref(), Some(std::path::Path::new("Documents/Recovered.docx")));
+    assert_eq!(serde_json::to_value(&target.session.doc).unwrap(), serde_json::to_value(&source.session.doc).unwrap());
+}
+
+#[test]
+fn hosted_recovery_refuses_a_target_with_an_unconfirmed_save() {
+    let (mut a, saves, last) = host_async_app();
+    // The shared fixture intentionally starts with edits. Establish a clean
+    // source through its real save/acknowledgement path before testing Save As.
+    a.execute("file.save", json!({})).unwrap();
+    saves.finish(last.get(), async_saves::SaveOutcome::SavedWithPath("source.docx".into()));
+    a.settle_async_saves();
+    assert!(!a.session.dirty);
+    let snapshot = a.execute("document.recoverySnapshot", json!({})).unwrap();
+    a.execute("file.saveAs", json!({"path":"Documents/Pending.docx"})).unwrap();
+    assert!(!a.session.dirty, "the native model was clean before this unconfirmed Save As");
+    let document = a.session.document_id();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let error = a
+        .execute("document.restoreSnapshot", json!({"version":1,"data":snapshot["data"],"expectedRevision":a.session.rev().to_string()}))
+        .unwrap_err();
+    assert!(error.contains("existing work"), "{error}");
+    assert_eq!(a.session.document_id(), document);
+    assert_eq!(a.saves_in_flight.len(), 1);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+}
+
+#[test]
+fn hosted_checkpoint_does_not_cancel_pickers_change_recent_or_disturb_the_live_view() {
+    let mut a = app();
+    a.execute("text.insert", json!({"text":"Keep this editing state"})).unwrap();
+    insert_picture(&mut a, [200, 30, 30, 255]);
+    a.change_picture_target = a.selected_picture_media();
+    assert!(a.change_picture_target.is_some());
+    a.recipient_list_pending = true;
+    a.canvas.caret_visible_since = 123.0;
+    a.canvas.scroll_to_caret = false;
+    a.session.path = Some(std::path::PathBuf::from("Documents/Source.docx"));
+    a.ui.recent = vec!["Documents/Keep.docx".into()];
+    let target = a.change_picture_target.clone();
+    let selection = serde_json::to_value(&a.session.sel).unwrap();
+    let document = serde_json::to_value(&a.session.doc).unwrap();
+    let revision = a.session.rev();
+    a.execute("document.recoverySnapshot", json!({})).unwrap();
+    assert_eq!(a.change_picture_target, target);
+    assert!(a.recipient_list_pending);
+    assert_eq!(a.canvas.caret_visible_since, 123.0);
+    assert!(!a.canvas.scroll_to_caret);
+    assert_eq!(a.ui.recent, vec!["Documents/Keep.docx"]);
+    assert_eq!(serde_json::to_value(&a.session.sel).unwrap(), selection);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), document);
+    assert_eq!(a.session.rev(), revision);
+}
+
+#[test]
+fn hosted_recovery_checks_ui_owned_pending_work_in_a_nonactive_target() {
+    let (mut a, _saves, _last) = host_async_app();
+    let snapshot = a.execute("document.recoverySnapshot", json!({})).unwrap();
+    let target = a.session.document_id();
+    a.execute("file.saveAs", json!({"path":"Documents/Pending.docx"})).unwrap();
+    a.execute("file.new", json!({})).unwrap();
+    let active = a.session.document_id();
+    assert_ne!(active, target);
+    assert!(a.session.is_open(target));
+    let revision = a.session.with_document(target, |s| s.rev()).unwrap();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let ctx = egui::Context::default();
+    let (request, _reply) = ControlRequest::new(
+        "engine.execute",
+        json!({
+            "doc":target,"command":"document.restoreSnapshot",
+            "params":{"version":1,"data":snapshot["data"],"expectedRevision":revision.to_string()}
+        }),
+    );
+    let control::Outcome::Done(result) = control::handle(&mut a, &ctx, &request) else { panic!("recovery replies at once") };
+    assert_eq!(result["ok"], false, "{result}");
+    assert!(result["error"].as_str().unwrap().contains("existing work"));
+    assert_eq!(a.session.document_id(), active);
+    assert!(a.session.is_open(target));
+    assert_eq!(a.saves_in_flight.len(), 1);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
 }

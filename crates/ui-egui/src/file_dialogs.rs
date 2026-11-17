@@ -450,6 +450,12 @@ impl WordApp {
     }
 
     pub(crate) fn open_dialog(&mut self) {
+        if self.services.host_document.is_some() {
+            if let Err(error) = self.request_host_document("file.open", serde_json::json!({})) {
+                self.status(error);
+            }
+            return;
+        }
         if let Some(f) = &self.services.open_async {
             f("document");
             return;

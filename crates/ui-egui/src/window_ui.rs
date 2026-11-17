@@ -210,6 +210,7 @@ impl WordApp {
             read_aloud_error: _,
             saves_in_flight: _,
             confirmed_host_paths: _,
+            host_pause: _,
             recovery_seen: _,
             no_document: _,
             windows: _,

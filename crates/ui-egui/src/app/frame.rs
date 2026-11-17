@@ -69,10 +69,32 @@ impl WordApp {
     }
 
     /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).
-    pub(super) fn report_dirty(&self) {
+    pub(super) fn report_dirty(&mut self) {
         if let Some(f) = &self.services.on_dirty {
             f(self.document_unsaved() || panes::has_comment_drafts(self));
         }
+        if self.services.on_document_state.is_some() {
+            let state = self.host_document_state();
+            if let Some(f) = &self.services.on_document_state {
+                f(&state);
+            }
+        }
+    }
+
+    /// Exact native revisions, including parked documents and pending saves.
+    pub fn host_document_state(&mut self) -> crate::HostDocumentState {
+        let documents = self
+            .session
+            .documents()
+            .into_iter()
+            .map(|document| {
+                let dirty = self.document_unsaved_by_id(document.id) || self.document_has_comment_drafts(document.id);
+                let pending_saves = self.saves_in_flight.iter().filter(|save| save.document == document.id).count();
+                let revision = self.session.with_document(document.id, |s| s.rev().to_string()).unwrap_or_default();
+                crate::HostDocument { id: document.id.to_string(), revision, dirty, pending_saves }
+            })
+            .collect();
+        crate::HostDocumentState { active: self.session.document_id().to_string(), documents }
     }
 
     /// Draw the File page, the empty-window chrome, or the normal document window.

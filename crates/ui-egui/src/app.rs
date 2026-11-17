@@ -148,6 +148,7 @@ impl WordApp {
             autosave_path: None,
             saves_in_flight: Vec::new(),
             confirmed_host_paths: Default::default(),
+            host_pause: None,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             recovery_seen: false,
             no_document: None,
@@ -207,13 +208,16 @@ impl WordApp {
     /// does, so tests, `ui_shot` and windows opened for a document start in the editor. Returns
     /// whether the Start screen shows.
     pub fn start_screen(&mut self) -> bool {
-        if self.ui.start_screen {
+        // An external document host supplies the initial document. Its startup
+        // placeholder must go away even when standalone Start is disabled.
+        let show = self.ui.start_screen || self.services.host_document.is_some();
+        if show {
             self.ui.backstage = true;
             self.ui.backstage_page = "home".into();
             self.no_document = Some(self.session.document_id());
             self.session.release_untitled_name();
         }
-        self.ui.start_screen
+        show
     }
 
     /// Whether a document is open: false from a Start screen launch until the user creates or
@@ -236,6 +240,11 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if self.host_pause.is_some() {
+            // Keep processing the control queue so the matching host lease can
+            // resume. User input cannot mutate the document during quiescence.
+            ctx.input_mut(|input| input.events.clear());
+        }
         // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
         ctx.add_plugin(super::a11y::FocusGuard);

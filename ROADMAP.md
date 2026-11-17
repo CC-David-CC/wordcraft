@@ -1,5 +1,8 @@
 # WordCraft roadmap
 
+> **WebOS integration update — 2026-11-16:** The maintained fork adds opt-in host-owned document windows, canonical save acknowledgements, native rich recovery, matching-revision pause leases, and account-scoped browser preferences/fonts. Native host tests and adapter regressions pass; rebuilt WASM and assembled browser qualification are pending. These changes do not revise upstream parity estimates or reprioritize its backlog. See [the integration contract](webos/README.md).
+
+
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
@@ -1449,3 +1452,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 ### Format Painter integration refresh, 2026-10-30
 
 Single-click release applies the armed painter to the target word without trailing spaces and disarms it. Explicit selections retain their scope (#1455, partial). Source and UI regressions are retained after the canvas/input module split. Earlier Windows pointer and browser qualification are historical; current-head hosted validation is pending, and native shortcut/Mint qualification is not newly claimed.
+
+### Maintained-fork revision — 2026-11-16
+
+WebOS document-host integration added under qualification. Native host and adapter regressions pass; actual-engine browser and release results remain the parent assembly’s responsibility. Upstream feature/parity priorities are unchanged.

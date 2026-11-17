@@ -32,6 +32,7 @@
 //! to the host rather than downloaded, the host guards leaving the page, and `?author=` names the
 //! user for comments and tracked changes.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_web_host::web::{FileData, Host, Message};
@@ -82,6 +83,50 @@ impl Bridge {
         // The crate does not repeat a state it already reported.
         let host = self.host.clone();
         services.on_dirty = Some(Box::new(move |dirty: bool| host.post_dirty(dirty)));
+        // External document-window ownership is opt-in; other embeddings keep
+        // their existing native file picker and window behavior.
+        let document_host = web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .is_some_and(|search| search.trim_start_matches('?').split('&').any(|part| part == "documentHost=1"));
+        if document_host {
+            let bridge = self.clone();
+            services.host_document = Some(Box::new(move |request| {
+                let encoded = serde_json::to_string(request).map_err(|_| "Could not encode document request")?;
+                let value = js_sys::JSON::parse(&encoded).map_err(|_| "Could not encode document request")?;
+                bridge.post_document_event("request", &value)
+            }));
+        }
+        // Metadata changes on every native revision, rather than only when the
+        // dirty boolean flips. Hosts can debounce rich checkpoints outside typing.
+        let bridge = self.clone();
+        let previous = RefCell::new(None);
+        services.on_document_state = Some(Box::new(move |state| {
+            if previous.borrow().as_ref() == Some(state) {
+                return;
+            }
+            if let Ok(encoded) = serde_json::to_string(state)
+                && let Ok(value) = js_sys::JSON::parse(&encoded)
+                && bridge.post_document_event("state", &value).is_ok()
+            {
+                *previous.borrow_mut() = Some(state.clone());
+            }
+        }));
+    }
+
+    fn post_document_event(&self, kind: &str, value: &JsValue) -> Result<(), String> {
+        let event_type = format!("wordcraft:document-{kind}");
+        if self.host.mode() == craft_web_host::Mode::Parent {
+            js_sys::Reflect::set(value, &"type".into(), &event_type.into()).map_err(|_| "Could not encode document state")?;
+            let window = web_sys::window().ok_or("Host page unavailable")?;
+            let parent = window.parent().map_err(|_| "Host page unavailable")?.ok_or("Host page unavailable")?;
+            let origin = window.location().origin().map_err(|_| "Host origin unavailable")?;
+            parent.post_message(value, &origin).map_err(|_| "Could not send document state".into())
+        } else {
+            let init = web_sys::CustomEventInit::new();
+            init.set_detail(value);
+            let event = web_sys::CustomEvent::new_with_event_init_dict(&event_type, &init).map_err(|_| "Could not encode document state")?;
+            self.canvas.dispatch_event(&event).map(|_| ()).map_err(|_| "Could not send document state".into())
+        }
     }
 
     /// `?author=`: the host's name for the user signs comments and tracked changes.
@@ -167,6 +212,7 @@ impl Bridge {
             set("revision", context.revision.to_string().into())?;
             set("operation", context.operation.as_str().into())?;
             set("documentSave", context.document_save.into())?;
+            set("path", context.path.as_str().into())?;
         }
         if self.host.mode() == craft_web_host::Mode::Parent {
             set("type", "wordcraft:save".into())?;
@@ -190,9 +236,16 @@ impl Bridge {
         let deliver = Rc::new(move |data: JsValue| {
             let read = |key: &str| js_sys::Reflect::get(&data, &JsValue::from_str(key)).ok().and_then(|v| v.as_string());
             let Some(ticket) = read("id").as_deref().and_then(save_ticket) else { return };
-            let error = read("error").unwrap_or_else(|| "The host could not confirm this save.".into());
-            let error: String = error.chars().take(1024).collect();
-            saves.finish(ticket, SaveOutcome::Failed(error));
+            if read("type").as_deref() == Some("wordcraft:save-result") {
+                match read("path").filter(|path| valid_source_path(path)) {
+                    Some(path) => saves.finish(ticket, SaveOutcome::SavedWithPath(path)),
+                    None => saves.finish(ticket, SaveOutcome::Failed("Host save result has no canonical source path.".into())),
+                }
+            } else {
+                let error = read("error").unwrap_or_else(|| "The host could not confirm this save.".into());
+                let error: String = error.chars().take(1024).collect();
+                saves.finish(ticket, SaveOutcome::Failed(error));
+            }
             ctx.request_repaint();
         });
         if self.host.mode() == craft_web_host::Mode::Parent {
@@ -204,9 +257,10 @@ impl Bridge {
                     return;
                 }
                 let data = event.data();
-                if js_sys::Reflect::get(&data, &JsValue::from_str("type")).ok().and_then(|v| v.as_string()).as_deref()
-                    == Some("wordcraft:save-failed")
-                {
+                if matches!(
+                    js_sys::Reflect::get(&data, &JsValue::from_str("type")).ok().and_then(|v| v.as_string()).as_deref(),
+                    Some("wordcraft:save-failed" | "wordcraft:save-result")
+                ) {
                     deliver(data);
                 }
             });
@@ -238,6 +292,14 @@ impl Bridge {
 
 fn save_ticket(id: &str) -> Option<u64> {
     id.strip_prefix("wordcraft-save-")?.parse().ok()
+}
+
+fn valid_source_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 2048
+        && !path.starts_with('/')
+        && !path.ends_with('/')
+        && !path.split('/').any(|part| part.is_empty() || matches!(part, "." | "..") || part.chars().any(|c| c.is_control() || c == '\\'))
 }
 
 /// The file an open message carries, pushed onto the inbox for the next frame, like a dropped

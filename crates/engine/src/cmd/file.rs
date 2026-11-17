@@ -86,11 +86,15 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
 /// `file.newFromTemplate` and `file.saveTemplate` are registered in [`super::tools::specs`].
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("document.recoverySnapshot", "Capture Document Recovery", "Host", crate::recovery::snapshot)
+            .params("{} (explicit bounded rich-document checkpoint; does not save the file)").pure(),
+        CommandSpec::new("document.restoreSnapshot", "Restore Document Recovery", "Host", crate::recovery::restore_snapshot)
+            .params(r#"{"version":1,"data":string,"expectedRevision":string,"sourcePath"?:string} (replaces an unchanged clean target; always unsaved)"#).pure(),
         CommandSpec::new("file.rename", "Rename Document", "File › Info", rename).params(r#"{"name": string (document name; its extension is kept, so the name may be given with or without it)}"#).pure(),
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "unsaved"?: bool (bytes imported without a saved source; requires data), "password"?: string (for a password-protected Word document)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
@@ -243,6 +247,14 @@ pub(crate) fn normal_document(s: &Session) -> Document {
 /// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
 /// replaces an untouched blank document; otherwise it opens beside the open documents.
 fn open(s: &mut Session, v: &Value) -> CmdResult {
+    let unsaved = match v.get("unsaved") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(CmdError::Params("`unsaved` must be a boolean".into())),
+    };
+    if unsaved && p::str(v, "data").is_none() {
+        return Err(CmdError::Params("An unsaved import requires explicit file bytes".into()));
+    }
     let Some(path) = p::str(v, "path") else {
         s.push_ui_request(json!({"open": "openFile"}));
         return sel_result(s);
@@ -277,8 +289,14 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
+    if unsaved {
+        // A device import is content, not an account-file binding. Native Save
+        // must ask for a destination, and close/recovery must treat it as work.
+        s.path = None;
+        s.dirty = true;
+    }
     Ok(
-        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
+        json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
 }
 

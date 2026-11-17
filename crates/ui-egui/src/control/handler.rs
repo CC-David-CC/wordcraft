@@ -28,6 +28,7 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         })
         .collect();
     let unsaved_documents: Vec<Value> = document_states.iter().filter(|state| state["unsaved"] == true).map(|state| state["id"].clone()).collect();
+    let host_document_state = app.host_document_state();
     json!({
         "ui": app.prefs(),
         "view": app.session.view,
@@ -49,6 +50,10 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "documents": app.session.documents(),
         "documentStates": document_states,
         "unsavedDocuments": unsaved_documents,
+        "hostDocumentVersion": 1,
+        "hostDocumentState": host_document_state,
+        "hostPaused": app.host_pause.is_some(),
+        "hostOwnsDocuments": app.services.host_document.is_some(),
         "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
     })
 }
@@ -201,6 +206,11 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
             if id.starts_with("ui.") {
                 return err(format!("`{id}` works on the window: make the document active first (view.switchWindows {{\"id\": {doc}}})"));
             }
+            // The engine cannot see a parked view's unconfirmed save or
+            // comment field. Recovery must not replace that UI-owned work.
+            if let Err(error) = app.check_document_operation(id, doc) {
+                return err(error);
+            }
             // Close, with the same guard as the window's: unsaved changes need `force`.
             if id == "file.close" {
                 if let Some(e) = close_refused_for(app, doc, &params) {
@@ -241,6 +251,16 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 /// ids as commands. It refuses closing unsaved work and document operations without a document.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
+    if app.host_pause.is_some()
+        && !matches!(req.method.as_str(), "ui.inspect" | "document.inspect" | "engine.commands")
+        && !(matches!(req.method.as_str(), "engine.execute" | "command")
+            && matches!(
+                p.get("command").or(p.get("id")).and_then(Value::as_str),
+                Some("ui.hostPause" | "document.inspect" | "document.recoverySnapshot")
+            ))
+    {
+        return err("This document window is paused while the host ends the session.");
+    }
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {
             Ok(Some(doc)) => return handle_in(app, doc, &req.method, p),
@@ -264,8 +284,13 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         }
         "engine.commands" => {
             let reg = app.session.registry.clone();
-            let mut commands: Vec<Value> = reg.all().iter()
-                .map(|c| json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params, "enabled": app.session.why_disabled(c.id).is_none()}))
+            let mut commands: Vec<Value> = reg
+                .all()
+                .iter()
+                .map(|c| {
+                    json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params,
+                    "enabled": app.session.why_disabled(c.id).is_none() && !(app.services.host_document.is_some() && c.id == "view.newWindow")})
+                })
                 .collect();
             commands.extend(crate::printing::commands(app));
             let search = s("search").unwrap_or("").to_ascii_lowercase();

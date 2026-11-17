@@ -7,7 +7,6 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use web_sys::{IdbDatabase, IdbRequest, IdbTransactionMode};
 
-const DB_NAME: &str = "wordcraft";
 const STORE: &str = "fonts";
 
 fn js(e: JsValue) -> String {
@@ -31,9 +30,9 @@ async fn done(req: &IdbRequest) -> Result<JsValue, String> {
 }
 
 /// The database, with its font store made on first use.
-async fn open() -> Result<IdbDatabase, String> {
+async fn open(database: &str) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB is unavailable")?;
-    let req = factory.open_with_u32(DB_NAME, 1).map_err(js)?;
+    let req = factory.open_with_u32(database, 1).map_err(js)?;
     let upgrade_req = req.clone();
     let upgrade = Closure::<dyn FnMut()>::new(move || {
         if let Ok(db) = upgrade_req.result().and_then(|r| r.dyn_into::<IdbDatabase>())
@@ -50,35 +49,35 @@ async fn open() -> Result<IdbDatabase, String> {
     db?.dyn_into::<IdbDatabase>().map_err(js)
 }
 
-async fn store_async(name: String, bytes: Vec<u8>) -> Result<(), String> {
-    let db = open().await?;
+async fn store_async(database: String, name: String, bytes: Vec<u8>) -> Result<(), String> {
+    let db = open(&database).await?;
     let store = db.transaction_with_str_and_mode(STORE, IdbTransactionMode::Readwrite).map_err(js)?.object_store(STORE).map_err(js)?;
     let req = store.put_with_key(&js_sys::Uint8Array::from(bytes.as_slice()), &JsValue::from_str(&name)).map_err(js)?;
     done(&req).await.map(|_| ())
 }
 
-async fn forget_async(name: String) -> Result<(), String> {
-    let db = open().await?;
+async fn forget_async(database: String, name: String) -> Result<(), String> {
+    let db = open(&database).await?;
     let store = db.transaction_with_str_and_mode(STORE, IdbTransactionMode::Readwrite).map_err(js)?.object_store(STORE).map_err(js)?;
     let req = store.delete(&JsValue::from_str(&name)).map_err(js)?;
     done(&req).await.map(|_| ())
 }
 
 /// Keep `bytes` (a font file as the user gave it) under `name` (its stored file name).
-pub fn store(name: &str, bytes: &[u8]) {
+fn store(database: String, name: &str, bytes: &[u8]) {
     let (name, bytes) = (name.to_string(), bytes.to_vec());
     wasm_bindgen_futures::spawn_local(async move {
-        if let Err(e) = store_async(name.clone(), bytes).await {
+        if let Err(e) = store_async(database, name.clone(), bytes).await {
             log::error!("couldn't keep the font {name} for the next visit: {e}");
         }
     });
 }
 
 /// Forget the font stored under `name`.
-pub fn forget(name: &str) {
+fn forget(database: String, name: &str) {
     let name = name.to_string();
     wasm_bindgen_futures::spawn_local(async move {
-        if let Err(e) = forget_async(name.clone()).await {
+        if let Err(e) = forget_async(database, name.clone()).await {
             log::error!("couldn't forget the stored font {name}: {e}");
         }
     });
@@ -86,10 +85,10 @@ pub fn forget(name: &str) {
 
 /// Add every stored font to the font database (each checked like a new one; one that fails is
 /// logged and skipped), then repaint: the app lays out again when fonts change.
-pub fn load_all(ctx: egui::Context) {
+fn load_all(database: String, ctx: egui::Context) {
     wasm_bindgen_futures::spawn_local(async move {
         let r: Result<(), String> = async {
-            let db = open().await?;
+            let db = open(&database).await?;
             let store = db.transaction_with_str(STORE).map_err(js)?.object_store(STORE).map_err(js)?;
             let keys = done(&store.get_all_keys().map_err(js)?).await?;
             let values = done(&store.get_all().map_err(js)?).await?;
@@ -113,4 +112,15 @@ pub fn load_all(ctx: egui::Context) {
         }
         ctx.request_repaint();
     });
+}
+
+/// Capture the namespace once for this editor instance. A missing hosted
+/// account never loads, writes, deletes or assigns the legacy unscoped fonts.
+pub fn connect(services: &mut wordcraft_ui_egui::Services, database: Option<String>, ctx: egui::Context) {
+    let Some(database) = database else { return };
+    let writer = database.clone();
+    services.store_font = Some(Box::new(move |name, bytes| store(writer.clone(), name, bytes)));
+    let remover = database.clone();
+    services.forget_font = Some(Box::new(move |name| forget(remover.clone(), name)));
+    load_all(database, ctx);
 }

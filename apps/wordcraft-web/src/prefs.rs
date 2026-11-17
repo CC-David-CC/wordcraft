@@ -8,6 +8,29 @@ use wordcraft_ui_egui::{UiState, WordApp};
 /// The `localStorage` key.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const KEY: &str = "wordcraft.ui";
+
+/// Hosted recent-file names and author preferences belong to one account.
+/// An absent/invalid public profile disables persistence rather than falling
+/// back to another account's unscoped browser preferences.
+pub fn storage_key(hosted: bool, profile: Option<&str>) -> Option<String> {
+    scoped_key(KEY, hosted, profile)
+}
+
+/// Uploaded fonts have the same account boundary as recent files/preferences.
+pub fn font_database_key(hosted: bool, profile: Option<&str>) -> Option<String> {
+    scoped_key("wordcraft", hosted, profile)
+}
+
+fn scoped_key(base: &str, hosted: bool, profile: Option<&str>) -> Option<String> {
+    if !hosted {
+        return Some(base.into());
+    }
+    profile
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 256 && value.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
+        })
+        .map(|value| format!("{base}.host.{value}"))
+}
 /// Largest stored value read back (`localStorage` holds about 5 MB per site).
 const MAX_STORED: usize = 4 << 20;
 
@@ -73,6 +96,24 @@ mod tests {
     use super::*;
     use serde_json::json;
     use wordcraft_ui_egui::Services;
+
+    #[test]
+    fn hosted_preferences_do_not_fall_back_to_unscoped_or_other_accounts() {
+        assert_eq!(storage_key(false, None).as_deref(), Some(KEY));
+        assert_eq!(storage_key(true, None), None);
+        assert_eq!(storage_key(true, Some("../invalid")), None);
+        let a = storage_key(true, Some("synthetic-account-a"));
+        let b = storage_key(true, Some("synthetic-account-b"));
+        assert!(a.is_some());
+        assert_ne!(a, b);
+        assert_ne!(a.as_deref(), Some(KEY));
+        assert!(storage_key(true, Some("user:00000000-0000-0000-0000-000000000001")).is_some());
+        assert_eq!(font_database_key(false, None).as_deref(), Some("wordcraft"));
+        assert_eq!(font_database_key(true, None), None);
+        assert_eq!(font_database_key(true, Some("../invalid")), None);
+        assert_ne!(font_database_key(true, Some("synthetic-account-a")), font_database_key(true, Some("synthetic-account-b")));
+        assert_ne!(font_database_key(true, Some("synthetic-account-a")).as_deref(), Some("wordcraft"));
+    }
 
     fn app() -> WordApp {
         WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Services::default())

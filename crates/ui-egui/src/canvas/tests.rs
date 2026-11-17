@@ -2524,6 +2524,24 @@ fn saving_with_a_refused_comment_draft_saves_the_document() {
     assert!(status.contains("protected"), "the refusal is shown: {status:?}");
 }
 
+#[test]
+fn programmatic_save_with_a_refused_comment_draft_keeps_the_draft() {
+    let (mut h, id) = refused_draft();
+    h.state_mut().session.dirty = true;
+    let path = std::env::temp_dir().join(format!("wordcraft-host-refused-{}.docx", std::process::id()));
+    let r = h.state_mut().execute("file.save", json!({"path": path.to_string_lossy()}));
+    let saved = wordcraft_engine::io::open_path(&path);
+    let _ = std::fs::remove_file(&path);
+    assert!(r.is_ok(), "{r:?}");
+    assert!(saved.is_ok(), "the accepted document was saved");
+    assert!(!h.state().session.dirty);
+    assert!(crate::panes::comment_draft(h.state(), id).is_some_and(|d| d.contains("Refused")), "the draft stays");
+    let state = h.state_mut().host_document_state();
+    assert!(state.documents.iter().any(|d| d.id == state.active && d.dirty), "the host still protects the unsaved draft");
+    let status = h.state().status_msg.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
+    assert!(status.contains("protected"), "the refusal is shown: {status:?}");
+}
+
 /// #1348: in a read-only document the comment fields can't be typed in.
 #[test]
 fn comment_fields_are_read_only_where_comments_cant_change() {

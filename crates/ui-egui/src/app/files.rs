@@ -129,26 +129,36 @@ impl WordApp {
             if let Some(i) = self.saves_in_flight.iter().position(|s| s.ticket == ticket) {
                 let save = self.saves_in_flight.swap_remove(i);
                 match &outcome {
-                    async_saves::SaveOutcome::Saved => {
+                    async_saves::SaveOutcome::Saved | async_saves::SaveOutcome::SavedWithPath(_) => {
                         log::info!("confirmed save of {}", save.name);
                         // Replies may arrive out of order. An earlier Save As cannot
                         // replace the path selected by a later confirmed save.
                         if save.adopt_path && self.confirmed_host_paths.get(&save.document).is_none_or(|last| save.ticket > *last) {
                             self.confirmed_host_paths.insert(save.document, save.ticket);
-                            let name = std::path::PathBuf::from(&save.name);
+                            let name = std::path::PathBuf::from(match &outcome {
+                                async_saves::SaveOutcome::SavedWithPath(path) => path,
+                                _ => &save.name,
+                            });
+                            let recent = name.to_string_lossy().to_string();
                             if save.document == current {
                                 self.session.path = Some(name);
                             } else {
                                 let _ = self.session.with_document(save.document, |s| s.path = Some(name));
                             }
+                            // Host Save As returns before after_command can
+                            // see the adopted path. Recent must follow the same
+                            // durable acknowledgement as title and source.
+                            self.ui.recent.retain(|path| path != &recent);
+                            self.ui.recent.insert(0, recent);
+                            self.ui.recent.truncate(crate::MAX_RECENT);
                         }
                     }
                     async_saves::SaveOutcome::Cancelled | async_saves::SaveOutcome::Failed(_) => {
                         if save.marked_saved && save.document == current {
-                            self.session.dirty = true;
+                            self.session.dirty |= save.was_dirty || self.session.rev() != save.revision;
                         } else if save.marked_saved {
                             // Another document is shown: the one saved is unsaved again where it waits.
-                            let _ = self.session.with_document(save.document, |s| s.dirty = true);
+                            let _ = self.session.with_document(save.document, |s| s.dirty |= save.was_dirty || s.rev() != save.revision);
                         }
                     }
                 }
@@ -165,7 +175,9 @@ impl WordApp {
             }
             match outcome {
                 // Only when nothing changed since and no later save of it is still unconfirmed.
-                async_saves::SaveOutcome::Saved if !self.session.dirty && self.session.rev() == wait.rev && !self.save_unconfirmed() => {
+                async_saves::SaveOutcome::Saved | async_saves::SaveOutcome::SavedWithPath(_)
+                    if !self.session.dirty && self.session.rev() == wait.rev && !self.save_unconfirmed() =>
+                {
                     // A failed open was already reported by name in `execute_user`.
                     let is_open = wait.then == "file.open";
                     if let Err(e) = self.execute_held_back(&wait.then, wait.params)
@@ -175,7 +187,7 @@ impl WordApp {
                     }
                 }
                 // Edited while the picker was open (those edits may not be written yet): ask again.
-                async_saves::SaveOutcome::Saved => {
+                async_saves::SaveOutcome::Saved | async_saves::SaveOutcome::SavedWithPath(_) => {
                     let name = self.prompt_name();
                     self.dialog = Some(dialogs::Dialog::SaveChanges {
                         name,
@@ -303,9 +315,14 @@ impl WordApp {
         if id == "file.save"
             && self.services.host_save.is_some()
             && !self.legacy_word_path()
-            && let Some(name) = self.session.path.as_ref().and_then(|p| p.file_name())
+            && let Some(path) = self.session.path.as_ref()
         {
-            return name.to_string_lossy().to_string();
+            if self.services.host_document.is_some() {
+                return path.to_string_lossy().to_string();
+            }
+            if let Some(name) = path.file_name() {
+                return name.to_string_lossy().to_string();
+            }
         }
         self.default_save_name()
     }

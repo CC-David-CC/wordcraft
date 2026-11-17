@@ -56,8 +56,6 @@ pub fn start() {
                     if let Some(rs) = &cc.wgpu_render_state {
                         log::info!("wordcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
-                    // Fonts the user added on an earlier visit (#582); the app notices them arrive.
-                    font_store::load_all(cc.egui_ctx.clone());
                     let inbox: Inbox = Inbox::default();
                     let pasted: Inbox = Inbox::default();
                     if let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
@@ -76,13 +74,17 @@ pub fn start() {
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
+                    let hosted = services.host_document.is_some();
+                    let profile = query_param("hostProfile");
+                    let preference_key = crate::prefs::storage_key(hosted, profile.as_deref());
+                    font_store::connect(&mut services, crate::prefs::font_database_key(hosted, profile.as_deref()), cc.egui_ctx.clone());
                     let control = crate::api::install(cc.egui_ctx.clone());
                     let mut app = WordApp::new(session, services).with_control(control);
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
-                    let stored = stored_prefs();
+                    let stored = stored_prefs(preference_key.as_deref());
                     crate::prefs::restore(&mut app, stored.as_deref());
                     // A region chosen in File › Options replaces the browser's for the first blank
                     // document too (#838).
@@ -104,7 +106,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, preference_key }))
                 }),
             )
             .await;
@@ -139,6 +141,7 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    preference_key: Option<String>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -146,8 +149,8 @@ fn local_storage() -> Option<web_sys::Storage> {
 }
 
 /// The preferences stored on an earlier visit, if the browser allows storage.
-fn stored_prefs() -> Option<String> {
-    local_storage()?.get_item(crate::prefs::KEY).ok()?
+fn stored_prefs(key: Option<&str>) -> Option<String> {
+    local_storage()?.get_item(key?).ok()?
 }
 
 impl eframe::App for WebShell {
@@ -161,10 +164,10 @@ impl eframe::App for WebShell {
         }
         self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
-        if let Some(json) = self.prefs.changed(&self.app) {
+        if let (Some(json), Some(key)) = (self.prefs.changed(&self.app), self.preference_key.as_deref()) {
             match local_storage() {
                 Some(store) => {
-                    if let Err(e) = store.set_item(crate::prefs::KEY, &json) {
+                    if let Err(e) = store.set_item(key, &json) {
                         log::warn!("preferences: cannot save: {e:?}");
                     }
                 }
@@ -298,8 +301,6 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
         inbox: Some(inbox),
         on_dirty: Some(Box::new(move |d| dirty.set(d))),
         animations_enabled: Some(animations_enabled()),
-        store_font: Some(Box::new(font_store::store)),
-        forget_font: Some(Box::new(font_store::forget)),
         load_system_fonts: Some(Box::new(move || {
             load_system_fonts(font_ctx.clone(), font_messages.clone());
         })),

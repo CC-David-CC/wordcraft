@@ -3,6 +3,9 @@ use crate::{CmdError, CmdResult, Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod hosted;
+pub(crate) use hosted::{restore_snapshot, snapshot};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryInfo {
