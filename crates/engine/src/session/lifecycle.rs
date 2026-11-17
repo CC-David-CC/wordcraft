@@ -157,6 +157,7 @@ impl Session {
             also_selected,
             member: None,
             prefs: Prefs::default(),
+            default_formatting: None,
             system_region: Default::default(),
             keymap: crate::KeyMap::default(),
             ribbon: crate::RibbonLayout::default(),

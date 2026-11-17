@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod cmd;
+mod default_formatting;
 pub(crate) mod doc_state;
 pub mod file_access;
 pub(crate) mod ime;

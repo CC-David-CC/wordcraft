@@ -261,7 +261,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: b
         let warning = app.font_box_warning(&font);
         let font = app.previews.font_shown(&font);
         let fams = app.previews.families();
-        let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
+        let recent = app.previews.recent_families(&app.ui.recent_fonts);
         let prev = app.previews.font_preview_fn();
         let _ = widgets::take_hover(ui.ctx());
         let options = widgets::FontComboOptions {

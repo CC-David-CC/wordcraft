@@ -237,6 +237,9 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
 /// language (the templates' text is English).
 pub(crate) fn normal_document(s: &Session) -> Document {
     let mut d = s.blank_document();
+    if let Some(defaults) = &s.default_formatting {
+        defaults.apply(&mut d);
+    }
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
         Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
     }

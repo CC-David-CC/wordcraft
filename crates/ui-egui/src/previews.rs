@@ -189,11 +189,6 @@ impl Previews {
             self.font_gen = generation;
             let db = wordcraft_fonts::FontDb::global();
             let mut f: Vec<String> = db.families_in(lang).into_iter().filter(|f| !f.starts_with('.')).collect();
-            for w in [wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT] {
-                if !f.iter().any(|x| x == w) {
-                    f.push(w.to_string());
-                }
-            }
             f.sort_by_key(|a| a.to_lowercase());
             f.dedup();
             let names = db.localized_names(lang);
@@ -203,6 +198,18 @@ impl Previews {
             self.east_asian = None;
         }
         self.families.as_ref().map(|(_, f)| f.clone()).unwrap_or_default()
+    }
+
+    /// Available recent choices in their displayed names. Keep unavailable history intact,
+    /// but do not offer a missing family as if it were installed. Typed/imported font names
+    /// remain valid document data and retain their substitution warning.
+    pub fn recent_families(&mut self, recent: &[String]) -> Vec<String> {
+        let available = self.families();
+        recent
+            .iter()
+            .map(|family| self.font_shown(family))
+            .filter(|shown| available.iter().any(|family| family.eq_ignore_ascii_case(shown)))
+            .collect()
     }
 
     /// The Font dialog's Asian text font list: the installed Chinese, Japanese and Korean fonts,

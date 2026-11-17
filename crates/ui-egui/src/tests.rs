@@ -4345,11 +4345,11 @@ fn the_font_box_lists_recently_used_fonts_first() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::{By, Queryable};
     let mut a = typed();
-    a.run("format.font", json!({"name": "Recent Font Alpha"})).unwrap();
-    a.run("format.font", json!({"name": "Recent Font Beta"})).unwrap();
+    a.run("format.font", json!({"name": "Source Sans 3"})).unwrap();
+    a.run("format.font", json!({"name": "Source Serif 4"})).unwrap();
     let mut h = harness(a);
     h.run_steps(6);
-    h.get(By::new().role(Role::TextInput).value("Recent Font Beta")).focus();
+    h.get(By::new().role(Role::TextInput).value("Source Serif 4")).focus();
     h.step();
     let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
     h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
@@ -4358,24 +4358,24 @@ fn the_font_box_lists_recently_used_fonts_first() {
     h.run_steps(2);
     assert!(h.query(By::new().role(Role::TextInput).value("x")).is_some(), "the query replaced the font name");
     assert!(h.query_by_label("Recently Used Fonts").is_none(), "a query lists its matches only");
-    assert_eq!(h.query_all_by_label("Recent Font Alpha").count(), 0);
+    assert_eq!(h.query_all_by_label("Source Sans 3").count(), 0);
     h.event(key(egui::Key::Backspace, egui::Modifiers::NONE));
     h.run_steps(2);
     assert!(h.query(By::new().role(Role::TextInput).value("")).is_some(), "Backspace cleared the query");
     assert!(h.query_by_label("Recently Used Fonts").is_some(), "the section shows while nothing is typed");
     assert!(h.query_by_label("All Fonts").is_some());
-    assert_eq!(h.query_all_by_label("Recent Font Beta").count(), 1);
-    assert_eq!(h.query_all_by_label("Recent Font Alpha").count(), 1);
+    assert_eq!(h.query_all_by_label("Source Serif 4").count(), 1);
+    assert_eq!(h.query_all_by_label("Source Sans 3").count(), 1);
     // Down moves to the second recent font; Enter applies it.
     h.event(key(egui::Key::ArrowDown, egui::Modifiers::NONE));
     h.step();
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
     h.run_steps(2);
     let st = h.state_mut().session.run("format.state", &json!({})).unwrap();
-    assert_eq!(st.get("font").and_then(Value::as_str), Some("Recent Font Alpha"));
-    assert_eq!(h.state().ui.recent_fonts, ["Recent Font Alpha", "Recent Font Beta"]);
+    assert_eq!(st.get("font").and_then(Value::as_str), Some("Source Sans 3"));
+    assert_eq!(h.state().ui.recent_fonts, ["Source Sans 3", "Source Serif 4"]);
     // The arrow's list has the sections too; a click on a heading leaves it open.
-    let field = h.get(By::new().role(Role::TextInput).value("Recent Font Alpha")).rect();
+    let field = h.get(By::new().role(Role::TextInput).value("Source Sans 3")).rect();
     let arrow = egui::pos2(field.max.x + 8.0, field.center().y);
     for pressed in [true, false] {
         h.hover_at(arrow);
@@ -8818,6 +8818,43 @@ fn hosted_document_requests_preserve_the_live_buffer_and_do_not_prompt_for_repla
     assert_eq!(requests.borrow()[0].params["template"], "letter");
     assert!(!crate::widgets::enabled(&a, "view.newWindow"));
     assert!(a.execute("view.newWindow", json!({})).is_err());
+}
+
+#[test]
+fn hosted_set_default_requests_an_account_save_without_claiming_durable_success() {
+    let mut a = typed();
+    a.run("design.themeFonts", json!({"heading":"Inter","body":"Source Serif 4"})).unwrap();
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = requests.clone();
+    a.services.host_document = Some(Box::new(move |request| {
+        recorded.borrow_mut().push(request.clone());
+        Ok(())
+    }));
+    let before = a.session.doc.clone();
+    let revision = a.session.rev();
+    // Mouse/ribbon and programmatic commands enter the same host save path.
+    assert_eq!(a.run("design.setDefault", json!({})).unwrap()["hostRequested"], true);
+    assert_eq!(a.execute("design.setDefault", json!({})).unwrap()["hostRequested"], true);
+    assert_eq!(requests.borrow().len(), 2);
+    let requests = requests.borrow();
+    let request = &requests[0];
+    assert_eq!(request.command, "design.setDefault");
+    assert_eq!(request.params["defaults"]["minorFont"], "Source Serif 4");
+    assert!(request.params["defaults"].get("body").is_none());
+    assert_eq!(a.session.doc, before);
+    assert_eq!(a.session.rev(), revision);
+    assert!(a.status_msg.as_ref().unwrap().0.starts_with("Saving"));
+    a.execute("ui.hostDefaultsResult", json!({"saved":false})).unwrap();
+    assert!(a.status_msg.as_ref().unwrap().0.contains("not confirmed"));
+    a.execute("ui.hostDefaultsResult", json!({"saved":true})).unwrap();
+    assert!(a.status_msg.as_ref().unwrap().0.contains("saved to your account"));
+    let defaults = requests[0].params["defaults"].clone();
+    a.start_screen();
+    assert!(!a.has_document());
+    a.execute("design.loadDefaults", defaults).unwrap();
+    assert!(!a.has_document(), "loading preferences must not materialize the startup placeholder");
+    a.execute("file.new", json!({"template":"blank"})).unwrap();
+    assert_eq!(a.session.doc.settings.minor_font, "Source Serif 4");
 }
 
 #[test]

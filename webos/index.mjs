@@ -7,6 +7,8 @@ const digest = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value
 const validName = name => typeof name === 'string' && name.length > 0 && name.length <= 255 && !name.startsWith('.') && !/[\x00-\x1f/\\]/.test(name);
 const base64 = bytes => { const parts = []; for (let i = 0; i < bytes.length; i += 24576) { let text = ''; for (const value of bytes.subarray(i, i + 24576)) text += String.fromCharCode(value); parts.push(btoa(text)); } return parts.join(''); };
 
+import {DEFAULTS_PATH, encodeDefaults, readDefaults, writeDefaults} from './defaults.mjs';
+
 export function mount({instanceId, sessionId, resource = null, imported = null, template = 'blank', recoveryAsCopy = false, profileId = '', files, authority, authorize, recovery = null,
   openFile, activateFile, newDocument, importDocument, closeView, displayName = '', url, signal: parentSignal}) {
   if (!instanceId || !sessionId || !files || typeof authorize !== 'function') throw TypeError('WordCraft requires explicit instance/session identity, Storage and authorization.');
@@ -168,6 +170,7 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
   }
   async function hostAction(command,params={}) {
     check();if(paused||!loaded)throw Error('WordCraft document is unavailable.');
+    if(command==='design.setDefault')return saveDefaults(params.defaults);
     if(command==='file.new'){if(typeof newDocument!=='function')throw Error('Desktop document launch is unavailable.');return newDocument(params);}
     if(command==='file.close'){if(typeof closeView!=='function')throw Error('Desktop close is unavailable.');return closeView();}
     if(command==='file.saveAs')return saveDocument(true);
@@ -185,6 +188,31 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
       const bytes=new Uint8Array(await choice.file.arrayBuffer());check();return importDocument({name:choice.file.name,data:base64(bytes)});
     }
     throw Error('Unknown native document request.');
+  }
+  async function saveDefaults(defaults, candidate=authority) {
+    check();
+    if(paused||!loaded||commandPending)throw Error('Wait for the current document operation before setting defaults.');
+    commandPending++;changed();
+    try {
+      if(await authorize(candidate,{instanceId,sessionId,documentId:currentDocument,resourceId:DEFAULTS_PATH,operation:'design.setDefault'})!==true)throw Error('Changing account defaults is not authorized.');
+      check();
+      // Native parsing is authoritative and validates the version, size and styles.
+      encodeDefaults(defaults);
+      const validated=await api().request('engine.execute',{command:'design.validateDefaults',params:defaults,doc:Number(currentDocument)});check();
+      status.textContent='Saving default formatting to your account…';
+      const result=await writeDefaults(files,check,validated,{signal:abort.signal});check();
+      status.textContent='Default formatting saved to your account for new blank documents.';
+      // A failed status repaint cannot undo a server-confirmed write or turn
+      // its durable result into an unconfirmed save.
+      try{await api().request('engine.execute',{command:'ui.hostDefaultsResult',params:{saved:true},doc:Number(currentDocument)});}
+      catch(error){check();status.textContent='Default formatting saved to your account. The editor could not display its confirmation.';}
+      check();
+      return result;
+    } catch(error) {
+      if(!disposed){status.textContent='Default formatting was not confirmed saved: '+error.message;
+        await api().request('engine.execute',{command:'ui.hostDefaultsResult',params:{saved:false},doc:Number(currentDocument)}).catch(()=>{});}
+      throw error;
+    } finally {commandPending--;if(!disposed)changed();}
   }
   function startupFailed(error) {
     if(disposed)return;phase='failed';loadError=error.message;status.textContent=error.message;clearTimeout(startup);readyReject(error);frame.inert=true;
@@ -222,7 +250,13 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
           if(!validName(imported.name)||typeof imported.data!=='string'||imported.data.length>Math.ceil(MAX_FILE/3)*4)throw Error('Invalid document import.');
           await api().request('engine.execute',{command:'file.open',params:{path:imported.name,data:imported.data,unsaved:true}});check();
           status.textContent='Imported document; use Save As to save it to your account.';
-        }else{await api().request('engine.execute',{command:'file.new',params:{template}});check();status.textContent='New document; not saved to your account.';}
+        }else{
+          if(!['sample','letter','resume','report'].includes(template)){
+            const defaults=await readDefaults(files,check);check();
+            if(defaults){await api().request('engine.execute',{command:'design.loadDefaults',params:defaults.value});check();}
+          }
+          await api().request('engine.execute',{command:'file.new',params:{template}});check();status.textContent='New document; not saved to your account.';
+        }
       }
       await api().execute('ui.backstage',{value:false});check();await refresh();loaded=true;phase='ready';frame.inert=false;clearTimeout(startup);changed();readyResolve();
       if(draft||imported)scheduleCheckpoint();
@@ -246,8 +280,12 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
     if(paused)throw Error('WordCraft is paused while the desktop ends this session.');
     if(command==='file.open'){if(typeof args.path!=='string'||Object.hasOwn(args,'data'))throw Error('Programmatic Open requires an account file path.');return openAccount(args.path);}
     if(command==='file.new')return hostAction(command,args);
+    if(command==='design.setDefault'){
+      const defaults=await api().request('engine.execute',{command:'design.defaultSnapshot',params:{},doc:Number(currentDocument)});check();
+      return saveDefaults(defaults,candidate);
+    }
     if(command==='file.close'){if(dirty()||pending())throw Error('Save or close this document through its close workflow first.');return hostAction(command,args);}
-    if(['view.newWindow','view.switchWindows','file.closeDocument','document.restoreSnapshot','ui.hostPause','ui.openFileDialog'].includes(command))throw Error('This operation is coordinated by the Desktop.');
+    if(['view.newWindow','view.switchWindows','file.closeDocument','document.restoreSnapshot','ui.hostPause','ui.hostDefaultsResult','design.loadDefaults','ui.openFileDialog'].includes(command))throw Error('This operation is coordinated by the Desktop.');
     if(command==='file.saveAs'&&!args.path)throw Error('Programmatic Save As requires an account-relative path.');
     if(args.path&&(command==='file.saveAs'||command==='file.save'))canonicalPath(args.path);
     if(command==='file.save'&&!bindings.has(currentDocument)&&!args.path)throw Error('Save As requires an explicit account-relative path.');

@@ -1092,3 +1092,15 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+#[test]
+fn design_font_choices_only_offer_available_heading_and_body_fonts() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let choices = design::font_choices(&mut app);
+    let db = wordcraft_fonts::FontDb::global();
+    assert!(choices.iter().any(|(_, heading, body)| heading == "Source Sans 3" && body == "Source Sans 3"));
+    for (label, heading, body) in choices {
+        assert!(db.has_family(&heading), "{label} heading is unavailable: {heading}");
+        assert!(db.has_family(&body), "{label} body is unavailable: {body}");
+    }
+}

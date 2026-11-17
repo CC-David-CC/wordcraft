@@ -148,6 +148,7 @@ impl Session {
             // The other windows, like `view`: not part of the document or its history.
             windows: _,
             prefs: _,
+            default_formatting: _,
             system_region: _,
             keymap: _,
             ribbon: _,

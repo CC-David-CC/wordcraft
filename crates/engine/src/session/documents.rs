@@ -269,6 +269,7 @@ impl Session {
             ui_requests: _,
             read_aloud: _,
             prefs: _,
+            default_formatting: _,
             system_region: _,
             keymap: _,
             ribbon: _,

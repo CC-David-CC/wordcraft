@@ -11,6 +11,7 @@ use wordcraft_doc::{Pos, StoryRef};
 use crate::{Session, cmd};
 
 mod bidi;
+mod default_formatting;
 mod documents;
 mod find_apostrophes;
 mod fit_one_page;
@@ -12826,6 +12827,37 @@ fn text_insert_marks_automatic_rewrites_as_transformed() {
     assert_eq!(text(&session), "Hello. ");
     run(&mut session, "edit.undo", json!({}));
     assert_eq!(text(&session), "Hello  ", "undo restores the spaces in one step");
+}
+
+#[test]
+fn shaded_style_set_preserves_contrast_through_theme_changes_and_docx() {
+    use wordcraft_doc::props::{Rgb, TextColor};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Visible shaded heading"}));
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "design.styleSet", json!({"name": "shaded"}));
+    let assert_contrast = |session: &Session, accent| {
+        let heading = session.doc.styles.get("Heading1").unwrap();
+        assert_eq!(heading.chr.color, Some(TextColor::Rgb(Rgb::WHITE)), "shaded text must stay white");
+        assert_eq!(heading.para.shading, Some(accent), "the background carries the theme accent");
+    };
+    let original = s.doc.settings.theme_colors[4];
+    assert_contrast(&s, original);
+    for (name, .., colors) in crate::cmd::design::THEMES {
+        run(&mut s, "design.themeColors", json!({"name": name}));
+        assert_contrast(&s, colors[0]);
+        let saved = crate::io::save_bytes("shaded.docx", &s.doc).unwrap();
+        let reopened = crate::io::open_bytes("shaded.docx", &saved).unwrap();
+        let heading = reopened.styles.get("Heading1").unwrap();
+        assert_eq!(heading.chr.color, Some(TextColor::Rgb(Rgb::WHITE)));
+        assert_eq!(heading.para.shading, Some(colors[0]));
+    }
+    run(&mut s, "edit.undo", json!({}));
+    let accent = s.doc.settings.theme_colors[4];
+    assert_contrast(&s, accent);
+    run(&mut s, "edit.redo", json!({}));
+    let accent = s.doc.settings.theme_colors[4];
+    assert_contrast(&s, accent);
 }
 
 #[test]

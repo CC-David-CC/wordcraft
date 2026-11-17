@@ -128,6 +128,15 @@ impl WordApp {
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.check_document_operation(id, self.session.document_id())?;
+        if id == "design.setDefault" && self.services.host_document.is_some() {
+            if let Some(error) = self.document_required_error(id) {
+                return Err(error);
+            }
+            let defaults = self.session.run("design.defaultSnapshot", &json!({})).map_err(|e| e.to_string())?;
+            let result = self.request_host_document(id, json!({"defaults":defaults}))?;
+            self.status("Saving default formatting to your account…");
+            return Ok(result);
+        }
         if id == "document.recoverySnapshot" {
             if let Some(error) = self.document_required_error(id) {
                 return Err(error);
@@ -826,6 +835,7 @@ impl WordApp {
                 self.open_dialog();
                 json!({})
             }
+            "ui.hostDefaultsResult" => return Some(self.host_defaults_result(p)),
             "ui.hostPause" => {
                 if self.services.host_document.is_none() {
                     return Some(Err("Host document coordination is unavailable.".into()));
@@ -994,6 +1004,18 @@ impl WordApp {
             return Err("Finish or save the existing work before recovering a document.".into());
         }
         Ok(())
+    }
+
+    fn host_defaults_result(&mut self, params: &Value) -> Result<Value, String> {
+        if self.services.host_document.is_none() {
+            return Err("Host document coordination is unavailable.".into());
+        }
+        self.status(if params.get("saved").and_then(Value::as_bool) == Some(true) {
+            "Default formatting saved to your account for new blank documents."
+        } else {
+            "Default formatting was not confirmed saved. Review the account error and retry."
+        });
+        Ok(json!({}))
     }
 
     pub(crate) fn request_host_document(&self, command: &str, params: Value) -> Result<Value, String> {
@@ -1228,6 +1250,10 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             // Restoring a host checkpoint opens a document from the empty
             // startup window; it must not require one to be open already.
             | "document.restoreSnapshot"
+            // Account defaults must be loaded before blank New, while the
+            // hosted startup window still has no document to edit.
+            | "design.loadDefaults"
+            | "design.validateDefaults"
             | "file.close"
             | "file.options"
             | "file.setAuthor"

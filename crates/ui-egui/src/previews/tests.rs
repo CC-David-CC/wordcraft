@@ -523,3 +523,18 @@ fn font_sample_shows_small_caps_and_the_script_mark() {
     assert_ne!(draw(&plain, None, false), draw(&plain, sup, false), "the mark is drawn");
     assert_ne!(draw(&plain, None, false), draw(&plain, None, true), "Switch Modes transforms the preview");
 }
+
+#[test]
+fn font_choices_only_include_available_families_and_recents() {
+    let mut previews = Previews::default();
+    let families = previews.families();
+    let db = wordcraft_fonts::FontDb::global();
+    assert!(!families.is_empty());
+    for shown in &families {
+        assert!(db.has_family(&previews.font_stored(shown)), "unavailable font offered: {shown}");
+    }
+    let recent = vec!["Not Shipped WebOS Font".into(), "Source Sans 3".into(), "Source Serif 4".into()];
+    assert_eq!(previews.recent_families(&recent), ["Source Sans 3", "Source Serif 4"]);
+    assert_eq!(recent[0], "Not Shipped WebOS Font", "history was not rewritten");
+    assert_eq!(previews.font_shown("Not Shipped WebOS Font"), "Not Shipped WebOS Font", "an existing document's requested name remains truthful");
+}

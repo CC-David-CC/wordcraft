@@ -149,6 +149,10 @@ def finalize(site, fonts, translations, source=ROOT, profile='release'):
     for label in ['README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'COPYRIGHT', 'NOTICE', 'ATTRIBUTION.md']:
         if (source / label).is_file():
             shutil.copy2(source / label, notices / label)
+    # These Latin families are embedded directly by wordcraft-fonts, separately
+    # from the pinned craft-fonts manifest. Redistribute their actual notices too.
+    for notice in (source / 'assets/fonts').glob('OFL-*.txt'):
+        shutil.copy2(notice, notices / notice.name)
     for notice in fonts.glob('fonts/*/OFL.txt'):
         shutil.copy2(notice, notices / ('OFL-' + notice.parent.name + '.txt'))
     for name in ['LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE']:

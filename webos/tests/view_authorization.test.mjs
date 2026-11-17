@@ -19,7 +19,7 @@ class Element extends EventTarget {
   get lastElementChild() { return this.children.at(-1); }
 }
 
-async function fixture({authorize: policy, dirty = false, write, read, snapshot, inspectDocument, profileId = '', allowFailure = false, activateFile, openFile, newDocument, recovery = null, resource = null} = {}) {
+async function fixture({authorize: policy, dirty = false, write, read, list, hostResult, snapshot, inspectDocument, profileId = '', allowFailure = false, activateFile, openFile, newDocument, recovery = null, resource = null} = {}) {
   const origin = 'https://example.test', authority = Object.freeze({}), window = new EventTarget();
   const calls = [], writes = [], decisions = [], replies = [], body = new Element();
   let frame, saveId = 0, stateDirty = dirty, pendingSaves = 0, stateRevision = dirty ? 1 : 0;
@@ -41,6 +41,9 @@ async function fixture({authorize: policy, dirty = false, write, read, snapshot,
       if(method==='engine.execute'&&args.command==='text.insert'){stateDirty=true;stateRevision++;}
       if(method==='engine.execute'&&args.command==='document.recoverySnapshot')return snapshot?snapshot(String(stateRevision)):{version:1,revision:String(stateRevision),data:'opaque native model '+stateRevision};
       if(method==='engine.execute'&&args.command==='file.open')return {id:1};
+      if(method==='engine.execute'&&args.command==='design.defaultSnapshot')return {version:1,styles:{styles:[]},majorFont:'Inter',minorFont:'Source Sans 3',themeColors:[[1,2,3]]};
+      if(method==='engine.execute'&&args.command==='design.validateDefaults')return args.params;
+      if(method==='engine.execute'&&args.command==='ui.hostDefaultsResult'&&hostResult)return hostResult(args.params);
       if (method === 'engine.execute' && args.command === 'file.save') {
         const id = ++saveId; pendingSaves++;stateRevision++;serialized.set('wordcraft-save-'+id,stateRevision);
         queueMicrotask(() => emit({type: 'wordcraft:save', id: 'wordcraft-save-' + id,
@@ -64,21 +67,21 @@ async function fixture({authorize: policy, dirty = false, write, read, snapshot,
   }});
   const context = vm.createContext({document, window, location: {href: origin + '/', origin},
     URL, AbortController, DOMException, setTimeout, clearTimeout, structuredClone, Blob,
-    ArrayBuffer, btoa, queueMicrotask, crypto:webcrypto});
+    ArrayBuffer, Uint8Array, TextEncoder, TextDecoder, btoa, queueMicrotask, crypto:webcrypto});
   const source = await readFile(new URL('../index.mjs', import.meta.url), 'utf8');
   const module = new vm.SourceTextModule(source, {context});
   await module.link(async specifier => {
     if(specifier==='./style.css')return new vm.SyntheticModule([], () => {}, {context});
-    assert.equal(specifier,'./dialogs.mjs');
-    return new vm.SourceTextModule(await readFile(new URL('../dialogs.mjs',import.meta.url),'utf8'),{context});
+    assert(['./dialogs.mjs','./defaults.mjs'].includes(specifier));
+    return new vm.SourceTextModule(await readFile(new URL('../'+specifier.slice(2),import.meta.url),'utf8'),{context});
   });
   await module.evaluate();
   const view = module.namespace.mount({instanceId: 'view-1', sessionId: 'session-1', url: '/editor', authority,
     resource,recovery,activateFile,openFile,newDocument,profileId,
-    files: {check() {},async read(){return read?read():{sha256:resource?.sha256||'b'.repeat(64),data:new Uint8Array([1])};},async version(){return {sha256:'b'.repeat(64)};},async write(path, bytes, previous) { writes.push({path, bytes, previous}); return write ? write(path,bytes,previous) : {sha256: 'a'.repeat(64)}; }},
+    files: {check() {},async list(path){return list?list(path):{entries:[]};},async mkdir(){},async read(path){return read?read(path):{sha256:resource?.sha256||'b'.repeat(64),data:new Uint8Array([1])};},async version(){return {sha256:'b'.repeat(64)};},async write(path, bytes, previous) { writes.push({path, bytes, previous}); return write ? write(path,bytes,previous) : {sha256: 'a'.repeat(64)}; }},
     authorize: async (candidate, request) => { decisions.push({candidate, request: structuredClone(request)}); return policy ? policy(candidate, request, authority) : candidate === authority; }});
-  emit({type: 'wordcraft:ready'}); if(allowFailure)await view.ready.catch(()=>{});else await view.ready; calls.length = 0; decisions.length = 0;
-  return {view, authority, calls, decisions, writes, replies, body, emit,
+  emit({type: 'wordcraft:ready'}); if(allowFailure)await view.ready.catch(()=>{});else await view.ready; const startupCalls=structuredClone(calls);calls.length = 0; decisions.length = 0;
+  return {view, authority, calls, startupCalls, decisions, writes, replies, body, emit,
     request: {instanceId: 'view-1', sessionId: 'session-1', documentId: '1', resourceId: resource?.path||'draft:1', command: 'text.insert', args: {text: 'authorized text'}}};
 }
 
@@ -317,4 +320,47 @@ test('native Open preserves newer typing instead of rejecting the gesture becaus
   f.emit({type:'wordcraft:document-request',document:'1',revision:'0',command:'file.open',params:{path:'Documents/Existing.docx'}});
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(activated,['Documents/Existing.docx']);assert.equal(f.view.lifecycle.snapshot().dirty,true);assert.equal(f.calls.length,0);
+});
+
+test('account defaults load before blank creation but never on existing-file Open',async t=>{
+  const defaults={version:1,styles:{styles:[]},majorFont:'Inter',minorFont:'Source Sans 3',themeColors:[[1,2,3]]};
+  const listing=async path=>({entries:path==='Digital Projects'?[{name:'WordCraft',directory:true}]:[{name:'defaults-v1.json',directory:false,bytes:200}]});
+  const fresh=await fixture({list:listing,read:async()=>({sha256:'a'.repeat(64),data:new TextEncoder().encode(JSON.stringify(defaults))})});
+  t.after(()=>fresh.view.dispose());
+  const commands=fresh.startupCalls.filter(c=>c.method==='engine.execute');
+  assert.deepEqual(commands.map(c=>c.args.command),['design.loadDefaults','file.new']);
+  assert.equal(commands[0].args.params.minorFont,'Source Sans 3');
+  const opened=await fixture({resource:{path:'Documents/Existing.docx',sha256:'b'.repeat(64)},list:()=>{throw Error('Existing documents must not load defaults');}});
+  t.after(()=>opened.view.dispose());
+  assert.equal(opened.startupCalls.some(c=>c.args?.command==='design.loadDefaults'),false);
+});
+
+test('Set as Default requires account authorization and acknowledges only confirmed storage',async t=>{
+  const denied=await fixture({authorize:(candidate,target,authority)=>candidate===authority&&target.operation!=='design.setDefault'});t.after(()=>denied.view.dispose());
+  await assert.rejects(denied.view.execute({...denied.request,command:'design.setDefault'},denied.authority),/denied/);
+  assert.equal(denied.writes.length,0);
+  const f=await fixture({dirty:true});t.after(()=>f.view.dispose());
+  const saved=await f.view.execute({...f.request,command:'design.setDefault',args:{}},f.authority);
+  assert.equal(saved.committed,true);assert.equal(saved.path,'Digital Projects/WordCraft/defaults-v1.json');
+  assert.equal(f.writes.length,1);assert.equal(f.writes[0].previous,null);
+  assert.equal(f.view.lifecycle.snapshot().dirty,true,'saving defaults must not mark the document saved');
+  assert.equal(f.calls.at(-1).args.command,'ui.hostDefaultsResult');assert.equal(f.calls.at(-1).args.params.saved,true);
+  assert(f.decisions.some(d=>d.request.resourceId==='Digital Projects/WordCraft/defaults-v1.json'));
+});
+
+test('native ribbon defaults use the same storage path and failed writes never announce success',async t=>{
+  const defaults={version:1,styles:{styles:[]},majorFont:'Inter',minorFont:'Source Sans 3',themeColors:[[1,2,3]]};
+  const f=await fixture({write:async()=>{throw Object.assign(Error('changed by another window'),{status:409});}});t.after(()=>f.view.dispose());
+  f.emit({type:'wordcraft:document-request',document:'1',revision:'0',command:'design.setDefault',params:{defaults}});
+  for(let attempt=0;attempt<20&&!f.calls.some(c=>c.args?.command==='ui.hostDefaultsResult');attempt++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.writes.length,1);assert.equal(f.calls.at(-1).args.command,'ui.hostDefaultsResult');
+  assert.equal(f.calls.at(-1).args.params.saved,false);
+  assert.equal(f.calls.some(c=>c.args?.command==='design.loadDefaults'),false,'failed storage must not install an unconfirmed default');
+});
+
+test('a failed native status update cannot relabel confirmed defaults as a failed account save',async t=>{
+  const f=await fixture({hostResult:async()=>{throw Error('synthetic status transport failure');}});t.after(()=>f.view.dispose());
+  const saved=await f.view.execute({...f.request,command:'design.setDefault',args:{}},f.authority);
+  assert.equal(saved.committed,true);assert.equal(f.writes.length,1);
+  assert.equal(f.calls.some(c=>c.args?.command==='ui.hostDefaultsResult'&&c.args.params.saved===false),false);
 });

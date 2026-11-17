@@ -153,3 +153,44 @@ provenance live in craft-fonts. The normal asset receipt includes its notice.
 The craft-libs provider must contain every revision selected from that source,
 including the maintained craft-update fix. Both provider mappings are scoped to
 the build subprocess; canonical public URLs and exact revisions stay in Cargo.
+
+## Design contrast and available fonts follow-up
+
+The maintained fork is qualifying a native Shaded-style contrast correction and
+available-font choices. Home and Design font menus use the native database's
+available families, including fonts uploaded for the current account. Unavailable
+recent suggestions are hidden without deleting their history. Existing document
+font requests stay visible in the current-font field with their substitution
+warning; removing a menu choice does not rewrite a document's formatting.
+
+Source Sans 3, Source Serif 4, Inter and JetBrains Mono are embedded under their
+OFL licenses. The browser build includes their actual notices as well as the
+pinned craft-fonts notices. No proprietary font is added by this follow-up.
+Parent release evidence qualifies an exact source commit and artifact; this
+follow-up does not inherit the previous milestone's native/browser results.
+
+## Account defaults for new blank documents
+
+In the WebOS document host, Design → Set as Default captures a versioned native
+formatting record and saves it through the existing authenticated account-file
+capability to `Digital Projects/WordCraft/defaults-v1.json`. This stores style
+definitions, document default character/paragraph formatting, theme fonts and
+theme colors. It does not store body text, headers, comments, sections, account
+credentials or document save identity; tracked style-edit history is excluded.
+
+Blank New loads the current account's record before creating the native document.
+Explicit sample/letter/resume/report templates, file Open, imports and draft
+recovery retain their own formatting. Loading or saving defaults does not mark the
+current document saved, rewrite its formatting or change its file binding.
+Native `design.defaultSnapshot`, `design.validateDefaults` and `design.loadDefaults`
+share the same bounded schema as the headless engine's session-local Set as Default.
+The host acknowledges durable success only after Storage confirms a revision.
+Concurrent changes use compare-and-swap; failures and uncertain results remain
+visible. Missing settings use built-ins; corrupt or unavailable settings block
+blank creation with Retry rather than silently selecting another account's data.
+There is no browser-global or guessed-account fallback. A fresh browser retrieves
+the server record after signing in; uploaded font bytes still have their separate
+account-scoped browser store and are not copied into the defaults record.
+
+The record is capped at 256 KiB and 512 styles. Existing source and artifact
+qualification remain separate; the parent release report records actual acceptance.

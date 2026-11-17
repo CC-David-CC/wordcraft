@@ -16,6 +16,24 @@ pub(super) fn style_set_box(app: &mut WordApp, ui: &mut Ui) -> (Rect, Rect) {
     (gallery, gui.min_rect())
 }
 
+/// Theme font choices must resolve to real available families. Preserve installed heading/body
+/// pairs, and offer the available families themselves so the web menu is useful without Office
+/// or platform fonts. The native font database also includes account-uploaded fonts.
+pub(super) fn font_choices(app: &mut WordApp) -> Vec<(String, String, String)> {
+    let db = wordcraft_fonts::FontDb::global();
+    let mut choices = Vec::new();
+    for (name, heading, body, _) in wordcraft_engine::cmd::design::THEMES {
+        if db.has_family(heading) && db.has_family(body) {
+            choices.push((format!("{}: {heading} / {body}", tl!(name)), (*heading).into(), (*body).into()));
+        }
+    }
+    for shown in app.previews.families() {
+        let stored = app.previews.font_stored(&shown);
+        choices.push((shown, stored.clone(), stored));
+    }
+    choices
+}
+
 pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Themes", None, app, |ui, app| {
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("themes", Some("Themes"), "Themes", true, "design.themes"), |ui, app| {
@@ -42,9 +60,11 @@ pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
                 app,
                 crate::widgets::MenuButtonOptions::new("fonts", Some("Fonts"), "Theme Fonts", false, "design.themeFonts"),
                 |ui, app| {
-                    for (name, h, b, _) in wordcraft_engine::cmd::design::THEMES {
-                        mi_text(ui, app, &format!("{}: {h} / {b}", tl!(name)), "design.themeFonts", json!({"heading": h, "body": b}));
-                    }
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (label, heading, body) in font_choices(app) {
+                            mi_text(ui, app, &label, "design.themeFonts", json!({"heading": heading, "body": body}));
+                        }
+                    });
                 },
             );
         });

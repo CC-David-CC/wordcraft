@@ -1,5 +1,8 @@
 # WordCraft roadmap: milestones and what's next
 
+> **WebOS follow-up — 2026-11-17:** Shaded style contrast, available-font menu choices and account-backed blank-document defaults are under qualification on the maintained fork. See `webos/README.md`; upstream parity estimates and backlog priorities are unchanged.
+
+
 > **WebOS integration update — 2026-11-16:** The maintained fork adds opt-in host-owned document windows, canonical save acknowledgements, native rich recovery, matching-revision pause leases, and account-scoped browser preferences/fonts. Native host tests and adapter regressions pass; rebuilt WASM and assembled browser qualification are pending. These changes do not revise upstream parity estimates or reprioritize its backlog. See [the integration contract](../webos/README.md).
 
 

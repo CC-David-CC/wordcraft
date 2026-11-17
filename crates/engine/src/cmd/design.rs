@@ -82,8 +82,25 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
         ),
         CommandSpec::new("design.setDefault", "Set as Default", "Design › Document Formatting", |s, _| {
-            s.status = "These settings will be used for new documents.".into();
-            sel_result(s)
+            let defaults = crate::default_formatting::DefaultFormatting::capture(&s.doc)?;
+            let result = defaults.value()?;
+            s.default_formatting = Some(defaults);
+            s.status = "Default formatting updated for new blank documents in this session.".into();
+            Ok(result)
+        })
+        .pure(),
+        CommandSpec::new("design.defaultSnapshot", "Inspect Default Formatting", "Agents", |s, _| {
+            crate::default_formatting::DefaultFormatting::capture(&s.doc)?.value()
+        })
+        .pure(),
+        CommandSpec::new("design.loadDefaults", "Load Default Formatting", "Agents", |s, value| {
+            let defaults = crate::default_formatting::DefaultFormatting::parse(value)?;
+            s.default_formatting = Some(defaults);
+            Ok(json!({"loaded":true}))
+        })
+        .pure(),
+        CommandSpec::new("design.validateDefaults", "Validate Default Formatting", "Agents", |_, value| {
+            crate::default_formatting::DefaultFormatting::parse(value)?.value()
         })
         .pure(),
         CommandSpec::new("design.themes", "Theme List", "Design › Document Formatting", |_, _| {
@@ -109,13 +126,20 @@ fn set_fonts(s: &mut Session, heading: &str, body: &str) {
 }
 
 fn set_accent(s: &mut Session, accent: Rgb) {
+    let previous = s.doc.settings.theme_colors.get(4).copied().unwrap_or(styles::HEADING_BLUE);
     for st in &mut Arc::make_mut(&mut s.doc.styles).styles {
         if st.id.starts_with("Heading") && st.id.len() == 8 && st.id.as_bytes().get(7).is_some_and(|d| *d <= b'5')
             || st.id == "IntenseQuote"
             || st.id == "IntenseEmphasis"
             || st.id == "IntenseReference"
         {
-            st.chr.color = Some(TextColor::Rgb(accent));
+            // The Shaded set puts white text on the current accent. Recolor its
+            // background, not its contrasting text, including on later theme changes.
+            if st.chr.color == Some(TextColor::Rgb(Rgb::WHITE)) && st.para.shading == Some(previous) {
+                st.para.shading = Some(accent);
+            } else {
+                st.chr.color = Some(TextColor::Rgb(accent));
+            }
             if let Some(b) = st.para.borders.as_mut() {
                 for e in [&mut b.top, &mut b.bottom].into_iter().flatten() {
                     e.color = Some(accent);
