@@ -495,7 +495,11 @@ impl WordApp {
     /// so the chooser's type menu shows it. Also what Browse in WordCraft… asks again for a pending export.
     pub(crate) fn export_request(&self, ext: &str) -> PickRequest {
         let file_ext = crate::print_page::export_file_ext(ext).to_string();
-        let name = format!("{}.{}", self.title_stem(), file_ext);
+        let stem = self.title_stem();
+        let mut name = format!("{stem}.{file_ext}");
+        if self.session.path.as_deref().and_then(std::path::Path::file_name).and_then(|name| name.to_str()) == Some(name.as_str()) {
+            name = format!("{stem} copy.{file_ext}");
+        }
         let mut req = PickRequest::save("export").file_name(name).suggested_extension(file_ext.clone());
         if let Some(&(label, _)) = crate::print_page::EXPORT_FORMATS.iter().find(|&&(_, e)| e == ext) {
             req = req.filter(tl!(label), &[file_ext.as_str()]);
