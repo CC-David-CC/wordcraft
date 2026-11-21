@@ -354,6 +354,35 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
   retryButton.addEventListener('click',()=>void initialize().catch(notify),{signal:abort.signal});
   const persist=()=>{if(!disposed&&loaded)void checkpoint().catch(()=>{});};
   const visibility=()=>{if(document.hidden)persist();};document.addEventListener('visibilitychange',visibility);window.addEventListener('pagehide',persist);
+  // The document is a native canvas. Deliver dictation through the same
+  // document command as typing so it participates in undo and recovery.
+  let inputGeneration=0;
+  frame.dataset.webosVoiceTarget='';
+  frame.addEventListener('load',()=>{
+    inputGeneration++;
+    const doc=frame.contentDocument;
+    for(const event of ['pointerdown','keydown','beforeinput','compositionstart','paste']){
+      doc?.addEventListener(event,()=>{inputGeneration++;},{capture:true,signal:abort.signal});
+    }
+  },{signal:abort.signal});
+  frame.codiVoiceCapture=()=>{
+    const doc=currentDocument,generation=inputGeneration;
+    const valid=()=>loaded&&!disposed&&!paused&&!pending()&&doc===currentDocument&&generation===inputGeneration;
+    if(!valid())return null;
+    async function bookmark(){
+      const ui=await refresh();
+      if(!valid()||ui.dialog||ui.ui?.backstage||!ui.focused||!ui.caret)throw Error('Select the WordCraft document text and try dictation again.');
+      const revision=activeState().revision;
+      const {anchor,focus}=await api().request('engine.execute',{command:'document.selection',params:{},doc:Number(doc)});
+      return JSON.stringify([doc,revision,anchor,focus]);
+    }
+    const initial=bookmark().catch(()=>null);
+    return {element:frame,valid,async insert(text){
+      const original=await initial;
+      if(!original||await bookmark()!==original||!valid())throw Error('The WordCraft selection changed. Voice text was discarded.');
+      await nativeCommand('text.insert',{text},doc);
+    }};
+  };
   function focusEditor(){
     check();if(!loaded||dialogs.active||paused)return false;
     frame.contentWindow.focus();frame.contentDocument?.querySelector('canvas')?.focus();
