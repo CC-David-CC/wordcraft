@@ -732,7 +732,7 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
 #[test]
 fn design_font_choices_only_offer_available_heading_and_body_fonts() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    let choices = design::font_choices(&mut app);
+    let choices = super::design::font_choices(&mut app);
     let db = wordcraft_fonts::FontDb::global();
     assert!(choices.iter().any(|(_, heading, body)| heading == "Source Sans 3" && body == "Source Sans 3"));
     for (label, heading, body) in choices {

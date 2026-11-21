@@ -453,8 +453,9 @@ mod tests {
     /// test, not a claim of arbitrary-document formatting fidelity.
     #[test]
     fn export_buttons_write_usable_files() {
+        use craft::host::ScriptedFiles;
         use egui_kittest::kittest::Queryable;
-        use std::{cell::RefCell, rc::Rc};
+        use std::sync::Arc;
         for (label, ext, roundtrip) in [
             ("PDF document (*.pdf)", "pdf", false),
             ("Word document (*.docx)", "docx", true),
@@ -470,34 +471,28 @@ mod tests {
             ("Plain text (*.txt)", "txt", true),
             ("Page image (*.png)", "png", false),
         ] {
-            let output = Rc::new(RefCell::new(Vec::new()));
-            let received = output.clone();
-            let services = Services {
-                pick_save: Some(Box::new(|name| Some(name.to_owned()))),
-                download: Some(Box::new(move |name, bytes| {
-                    received.borrow_mut().push((name.to_owned(), bytes.to_vec()));
-                    Ok(())
-                })),
-                ..Default::default()
-            };
+            let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
+            let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
             let mut session = Session::new(wordcraft_doc::Document::from_text("Synthetic export heading\nSynthetic export paragraph"));
             session.path = Some("Source.docx".into());
             session.run("select.text", &json!({"text": "Synthetic export heading"})).unwrap();
             session.run("format.bold", &json!({})).unwrap();
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 1200.0)).build_ui_state(
+            let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 1200.0)).build_ui_state(
                 |ui, app: &mut WordApp| {
                     let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
+                    crate::test_harness::driver_logic(&ctx, app);
                     export_formats(app, ui);
                 },
-                WordApp::new(session, services),
+                WordApp::new(session, Services::default()).with_host(Arc::new(host)),
             );
             h.run_steps(4);
             h.get_by_label(label).click();
             h.run_steps(4);
-            let output = output.borrow();
-            assert_eq!(output.len(), 1, "{label}: exactly one output");
-            let (name, bytes) = &output[0];
+            let requests = files.requests();
+            assert_eq!(requests.len(), 1, "{label}: exactly one output");
+            let name = requests[0].file_name.as_deref().expect("suggested export name");
+            let bytes = files.file(std::path::Path::new(name)).expect("recorded export contents");
+            let bytes = bytes.as_slice();
             assert!(!bytes.is_empty(), "{label}: nonempty output");
             if roundtrip {
                 let document = wordcraft_engine::io::open_bytes(name, bytes).unwrap_or_else(|e| panic!("{label}: {e}"));

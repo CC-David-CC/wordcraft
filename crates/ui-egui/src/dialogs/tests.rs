@@ -816,38 +816,6 @@ fn font_dialog_sets_kerning_for_fonts() {
     let _ = app.run("select.all", json!({}));
     let _ = app.run("format.set", json!({"props": {"kern": 0}}));
     let kern = |app: &WordApp, off| app.session.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props_of_char(off).kern);
-/// #1178: Modify Style's font box is the ribbon's font box, so typing part of a name picks the
-/// installed family instead of storing the typed text.
-#[test]
-fn modify_style_font_box_finds_the_family() {
-    use egui_kittest::kittest::{By, Queryable};
-    let mut app = app_with("Example");
-    assert!(crate::dialogs::open(&mut app, "modifyStyle", &json!({"style": "Normal"})).is_some());
-    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        app,
-    );
-    h.run_steps(3);
-    h.get(By::new().role(egui::accesskit::Role::TextInput).value(wordcraft_doc::styles::BODY_FONT)).focus();
-    h.step();
-    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-    h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
-    h.step();
-    // Autocomplete offers loaded families; the requested-but-unavailable Aptos
-    // name above remains truthful in the field but is not a synthetic choice.
-    h.event(egui::Event::Text("source serif".into()));
-    h.step();
-    // Enter both picks the highlighted family and presses OK, as in the Font dialog.
-    h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
-    h.run_steps(2);
-    assert!(h.state().dialog_host.is_empty(), "Enter pressed OK");
-    let rc = h.state().session.doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default());
-    assert_eq!(rc.font, "Source Serif 4");
-}
 
     let mut h = app_harness(app);
     h.run_steps(2);
@@ -873,6 +841,39 @@ fn modify_style_font_box_finds_the_family() {
         f.size = Some(13.0);
     });
     assert_eq!((kern(h.state(), 0), kern(h.state(), 7)), (Some(14.0), Some(0.0)), "each run keeps its kerning");
+}
+
+/// #1178: Modify Style's font box is the ribbon's font box, so typing part of a name picks the
+/// installed family instead of storing the typed text.
+#[test]
+fn modify_style_font_box_finds_the_family() {
+    use egui_kittest::kittest::{By, Queryable};
+    let mut app = app_with("Example");
+    assert!(crate::dialogs::open(&mut app, "modifyStyle", &json!({"style": "Normal"})).is_some());
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            crate::test_harness::driver_logic(&ctx, app);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    h.get(By::new().role(egui::accesskit::Role::TextInput).value(wordcraft_doc::styles::BODY_FONT)).focus();
+    h.step();
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
+    h.step();
+    // Autocomplete offers loaded families; the requested-but-unavailable Aptos
+    // name above remains truthful in the field but is not a synthetic choice.
+    h.event(egui::Event::Text("source serif".into()));
+    h.step();
+    // Enter both picks the highlighted family and presses OK, as in the Font dialog.
+    h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert!(h.state().dialog_host.is_empty(), "Enter pressed OK");
+    let rc = h.state().session.doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default());
+    assert_eq!(rc.font, "Source Serif 4");
 }
 
 /// #2786: Define New Bullet's Font… is the Font dialog, opened on the bullet's formatting. OK

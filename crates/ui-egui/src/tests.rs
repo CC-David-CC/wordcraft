@@ -4169,10 +4169,10 @@ fn host_async_dirty_report_stays_unsaved_until_server_confirmation() {
     a.services.on_dirty = Some(Box::new(move |dirty| seen.set(dirty)));
     let ctx = egui::Context::default();
     a.execute("file.save", json!({})).unwrap();
-    control_frame(&mut a, &ctx, true);
+    a.logic(&ctx);
     assert!(reported.get());
     saves.finish(saves.last(), Ended::Saved);
-    control_frame(&mut a, &ctx, true);
+    a.logic(&ctx);
     assert!(!reported.get());
 }
 
@@ -4400,7 +4400,7 @@ fn hosted_recovery_opens_from_the_empty_startup_window_through_control() {
             "params":{"version":1,"data":snapshot["data"],"expectedRevision":target.session.rev().to_string(),"sourcePath":"Documents/Recovered.docx"}
         }),
     );
-    let control::Outcome::Done(result) = control::handle(&mut target, &ctx, &request) else { panic!("recovery replies at once") };
+    let Reply::Done(result) = control::handle(&mut target, &ctx, &request) else { panic!("recovery replies at once") };
     assert_eq!(result["ok"], true, "{result}");
     assert!(target.has_document());
     assert!(!target.session.is_open(placeholder));
@@ -4441,7 +4441,7 @@ fn hosted_checkpoint_does_not_cancel_pickers_change_recent_or_disturb_the_live_v
     a.change_picture_target = a.selected_picture_media();
     assert!(a.change_picture_target.is_some());
     a.recipient_list_pending = true;
-    a.canvas.caret_visible_since = 123.0;
+    a.canvas.glide.restart(123.0);
     a.canvas.scroll_to_caret = false;
     a.session.path = Some(std::path::PathBuf::from("Documents/Source.docx"));
     a.ui.recent = vec!["Documents/Keep.docx".into()];
@@ -4452,7 +4452,7 @@ fn hosted_checkpoint_does_not_cancel_pickers_change_recent_or_disturb_the_live_v
     a.execute("document.recoverySnapshot", json!({})).unwrap();
     assert_eq!(a.change_picture_target, target);
     assert!(a.recipient_list_pending);
-    assert_eq!(a.canvas.caret_visible_since, 123.0);
+    assert_eq!(a.canvas.glide.since_restart_ms(200.0), 77.0);
     assert!(!a.canvas.scroll_to_caret);
     assert_eq!(a.ui.recent, vec!["Documents/Keep.docx"]);
     assert_eq!(serde_json::to_value(&a.session.sel).unwrap(), selection);
@@ -4480,7 +4480,7 @@ fn hosted_recovery_checks_ui_owned_pending_work_in_a_nonactive_target() {
             "params":{"version":1,"data":snapshot["data"],"expectedRevision":revision.to_string()}
         }),
     );
-    let control::Outcome::Done(result) = control::handle(&mut a, &ctx, &request) else { panic!("recovery replies at once") };
+    let Reply::Done(result) = control::handle(&mut a, &ctx, &request) else { panic!("recovery replies at once") };
     assert_eq!(result["ok"], false, "{result}");
     assert!(result["error"].as_str().unwrap().contains("existing work"));
     assert_eq!(a.session.document_id(), active);
@@ -4511,7 +4511,8 @@ fn web_backstage_output_returns_only_after_success() {
                 "export"
             };
             a.run("ui.backstage", json!({"value": true, "page": page})).unwrap();
-            a.canvas.want_focus = false;
+            a.ctx = Some(crate::test_harness::context());
+            a.canvas.focus_pending = false;
             a.execute(id, json!({"path": path})).unwrap();
             assert!(a.ui.backstage, "pending {id} must stay on File");
             a.settle_saves();
@@ -4520,7 +4521,7 @@ fn web_backstage_output_returns_only_after_success() {
             saves.finish(saves.last(), outcome);
             a.settle_saves();
             assert_eq!(a.ui.backstage, !success, "{id}: only acknowledged success returns to the document");
-            assert_eq!(a.canvas.want_focus, success);
+            assert_eq!(a.canvas.focus_pending, success);
             assert_eq!(a.session.dirty, !success || matches!(id, "file.exportPdf" | "file.exportPng" | "file.printPdf"));
         }
     }
@@ -4536,11 +4537,11 @@ fn web_backstage_output_completion_does_not_close_another_page_or_document() {
             a.execute("file.new", json!({})).unwrap();
         }
         a.run("ui.backstage", json!({"value": true, "page": if other_document { "export" } else { "options" }})).unwrap();
-        a.canvas.want_focus = false;
+        a.canvas.focus_pending = false;
         saves.finish(saves.last(), Ended::Saved);
         a.settle_saves();
         assert!(a.ui.backstage, "late completion cannot dismiss a different page or document");
-        assert!(!a.canvas.want_focus);
+        assert!(!a.canvas.focus_pending);
     }
 }
 
@@ -4558,7 +4559,8 @@ fn browser_print_completion_returns_only_after_dialog_acceptance() {
             Ok(rx)
         }));
         a.run("file.print", json!({})).unwrap();
-        a.canvas.want_focus = false;
+        a.ctx = Some(crate::test_harness::context());
+        a.canvas.focus_pending = false;
         assert_eq!(a.run("ui.print", json!({})).unwrap()["pending"], true);
         assert!(a.ui.backstage && a.printing.busy());
         assert!(a.run("ui.print", json!({})).is_err(), "cannot replace the pending PDF frame");
@@ -4566,7 +4568,7 @@ fn browser_print_completion_returns_only_after_dialog_acceptance() {
         sender.take().unwrap().send(outcome).unwrap();
         a.poll_printing(&egui::Context::default());
         assert_eq!(a.ui.backstage, !success);
-        assert_eq!(a.canvas.want_focus, success);
+        assert_eq!(a.canvas.focus_pending, success);
         assert!(a.session.dirty, "printing or cancellation is never a document save");
         if success {
             let wording = printing::app_feedback(&a, a.printing.message.as_ref().unwrap());
@@ -4589,11 +4591,11 @@ fn browser_print_completion_does_not_dismiss_another_document() {
     a.execute("file.new", json!({})).unwrap();
     a.run("file.print", json!({})).unwrap();
     assert!(a.run("ui.print", json!({})).is_err(), "a refused second print cannot take ownership of the first request");
-    a.canvas.want_focus = false;
+    a.canvas.focus_pending = false;
     tx.send(Ok(String::new())).unwrap();
     a.poll_printing(&egui::Context::default());
     assert!(a.ui.backstage);
-    assert!(!a.canvas.want_focus);
+    assert!(!a.canvas.focus_pending);
 }
 
 #[test]
