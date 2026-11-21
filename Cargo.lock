@@ -9326,6 +9326,7 @@ dependencies = [
  "chrono",
  "craft",
  "craft-fonts-build",
+ "craft-ui",
  "craft-ui-test-kit",
  "craft-zip",
  "egui",

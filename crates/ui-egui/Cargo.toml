@@ -58,7 +58,8 @@ craft = { workspace = true, features = ["dialogs", "update"] }
 js-sys = "0.3"
 
 [dev-dependencies]
-craft = { workspace = true, features = ["screen-testing"] }
+# The UI facade re-exports the fixture APIs when its testing feature is active.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", features = ["testing"] }
 cfb = { workspace = true }
 # Producer tests simulate a globally exhausted IME revision allocator through the engine's
 # explicit test-support feature; production builds of this crate never enable it.
