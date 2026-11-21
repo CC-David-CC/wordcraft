@@ -875,10 +875,19 @@ fn modify_style_font_box_finds_the_family() {
     // name above remains truthful in the field but is not a synthetic choice.
     h.event(egui::Event::Text("source serif".into()));
     h.step();
-    // Enter both picks the highlighted family and presses OK, as in the Font dialog.
+    // The font popup handles Enter to pick the highlighted family. Confirm the
+    // dialog separately after checking that the picker resolved the typed prefix.
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
     h.run_steps(2);
-    assert!(h.state().dialog_host.is_empty(), "Enter pressed OK");
+    h.get(
+        By::new()
+            .role(egui::accesskit::Role::ComboBox)
+            .label("Font:")
+            .value("Source Serif 4")
+            .predicate(|node| !node.is_hidden()),
+    );
+    press(&mut h, "OK");
+    assert!(h.state().dialog_host.is_empty(), "OK closed Modify Style");
     let rc = h.state().session.doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default());
     assert_eq!(rc.font, "Source Serif 4");
 }
