@@ -217,7 +217,7 @@ def main():
     env = scoped_fork_environment(args.craft_libs_origin, CRAFT_LIBS_UPSTREAM, env)
     command = ['trunk', 'build', '--locked', '--skip-version-check', '--color', 'never', '--dist', str(output), '--public-url', './']
     if args.profile == 'release':
-        command += ['--release', str(ROOT / 'apps/wordcraft-web/index.html')]
+        command += ['--release=true', str(ROOT / 'apps/wordcraft-web/index.html')]
     else:
         # The same complete engine and assets, without a release-only size
         # optimization pass on every development rebuild. No codec/font/UI is removed.
