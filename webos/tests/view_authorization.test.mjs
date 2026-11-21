@@ -19,12 +19,12 @@ class Element extends EventTarget {
   get lastElementChild() { return this.children.at(-1); }
 }
 
-async function fixture({authorize: policy, dirty = false, write, read, list, hostResult, snapshot, inspectDocument, profileId = '', allowFailure = false, activateFile, openFile, newDocument, recovery = null, resource = null} = {}) {
+async function fixture({authorize: policy, dirty = false, write, read, list, hostResult, snapshot, inspectDocument, selection, profileId = '', allowFailure = false, activateFile, openFile, newDocument, recovery = null, resource = null} = {}) {
   const origin = 'https://example.test', authority = Object.freeze({}), window = new EventTarget();
   const calls = [], writes = [], decisions = [], replies = [], body = new Element();
   let frame, saveId = 0, stateDirty = dirty, pendingSaves = 0, stateRevision = dirty ? 1 : 0;
   const serialized = new Map();
-  const state = () => ({document: 1, dirty: stateDirty, pendingSaves: 0,
+  const state = () => ({focused:true,caret:{x:10,y:10,h:12},document: 1, dirty: stateDirty, pendingSaves: 0,
     documents: [{id: 1, dirty: stateDirty}], documentStates: [{id: 1, revision: stateDirty ? 1 : 0}], unsavedDocuments: stateDirty ? [1] : [],
     hostDocumentVersion: 1, hostOwnsDocuments: true,
     hostDocumentState: {active:'1', documents:[{id:'1',revision:String(stateRevision),dirty:stateDirty,pendingSaves}]}});
@@ -37,6 +37,7 @@ async function fixture({authorize: policy, dirty = false, write, read, list, hos
     uiInspect: async () => state(), execute: async () => {},
     async request(method, args) {
       calls.push({method, args});
+      if(method==='engine.execute'&&args.command==='document.selection')return selection();
       if(method==='document.inspect'&&inspectDocument)return inspectDocument(args);
       if(method==='engine.execute'&&args.command==='text.insert'){stateDirty=true;stateRevision++;}
       if(method==='engine.execute'&&args.command==='document.recoverySnapshot')return snapshot?snapshot(String(stateRevision)):{version:1,revision:String(stateRevision),data:'opaque native model '+stateRevision};
@@ -389,4 +390,22 @@ test('public editor focus restores native caret focus without a save or resource
   assert(f.calls.some(c=>c.method==='ui.focus'&&c.args.doc===1));
   assert.equal(f.writes.length,0);
   assert.deepEqual(f.view.fileBinding.snapshot(),before);
+});
+
+
+test('dictation replaces only the captured document selection', async t => {
+  let anchor = 1;
+  const f = await fixture({selection:()=>({anchor:{off:anchor},focus:{off:5}})});
+  t.after(()=>f.view.dispose());
+  const frame=f.view.element.querySelector('iframe');
+  const stale=frame.codiVoiceCapture();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  anchor=2;
+  await assert.rejects(stale.insert('wrong selection'),/selection changed/i);
+  assert.equal(f.calls.filter(c=>c.args.command==='text.insert').length,0);
+  await frame.codiVoiceCapture().insert('spoken words');
+  const edits=f.calls.filter(c=>c.args.command==='text.insert');
+  assert.equal(edits.length,1);
+  assert.equal(edits[0].args.params.text,'spoken words');
+  assert.equal(edits[0].args.doc,1);
 });
