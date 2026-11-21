@@ -19,12 +19,12 @@ class Element extends EventTarget {
   get lastElementChild() { return this.children.at(-1); }
 }
 
-async function fixture({authorize: policy, dirty = false, write, read, list, hostResult, snapshot, inspectDocument, selection, profileId = '', allowFailure = false, activateFile, openFile, newDocument, recovery = null, resource = null} = {}) {
+async function fixture({authorize: policy, dirty = false, write, read, list, hostResult, snapshot, inspectDocument, selection, canvas, profileId = '', allowFailure = false, activateFile, openFile, newDocument, recovery = null, resource = null} = {}) {
   const origin = 'https://example.test', authority = Object.freeze({}), window = new EventTarget();
   const calls = [], writes = [], decisions = [], replies = [], body = new Element();
   let frame, saveId = 0, stateDirty = dirty, pendingSaves = 0, stateRevision = dirty ? 1 : 0;
   const serialized = new Map();
-  const state = () => ({focused:true,caret:{x:10,y:10,h:12},document: 1, dirty: stateDirty, pendingSaves: 0,
+  const state = () => ({focused:true,caret:{x:10,y:10,h:12},...canvas,document: 1, dirty: stateDirty, pendingSaves: 0,
     documents: [{id: 1, dirty: stateDirty}], documentStates: [{id: 1, revision: stateDirty ? 1 : 0}], unsavedDocuments: stateDirty ? [1] : [],
     hostDocumentVersion: 1, hostOwnsDocuments: true,
     hostDocumentState: {active:'1', documents:[{id:'1',revision:String(stateRevision),dirty:stateDirty,pendingSaves}]}});
@@ -408,4 +408,21 @@ test('dictation replaces only the captured document selection', async t => {
   assert.equal(edits.length,1);
   assert.equal(edits[0].args.params.text,'spoken words');
   assert.equal(edits[0].args.doc,1);
+});
+
+
+test('a selected page accepts dictation after the launcher takes focus, and a ribbon click clears it', async t => {
+  const canvas={focused:false,window:[400,300],canvasRect:[0,75,400,225],pages:[[20,80,360,300]]};
+  const f=await fixture({canvas,selection:()=>({anchor:{off:0},focus:{off:1}})});
+  t.after(()=>f.view.dispose());
+  const frame=f.view.element.querySelector('iframe');
+  let pointerDown;
+  frame.contentDocument={addEventListener(type,listener){if(type==='pointerdown')pointerDown=listener;}};
+  frame.dispatchEvent(new Event('load'));
+  const target={localName:'canvas',getBoundingClientRect:()=>({left:0,top:0,width:400,height:300})};
+  pointerDown({target,clientX:40,clientY:120});
+  await frame.codiVoiceCapture().insert('on the page');
+  pointerDown({target,clientX:40,clientY:20});
+  await assert.rejects(frame.codiVoiceCapture().insert('on the ribbon'),/selection changed/);
+  assert.equal(f.calls.filter(c=>c.args.command==='text.insert').length,1);
 });

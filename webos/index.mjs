@@ -356,13 +356,23 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
   const visibility=()=>{if(document.hidden)persist();};document.addEventListener('visibilitychange',visibility);window.addEventListener('pagehide',persist);
   // The document is a native canvas. Deliver dictation through the same
   // document command as typing so it participates in undo and recovery.
-  let inputGeneration=0;
+  let inputGeneration=0,lastCanvasPointer=null;
   frame.dataset.webosVoiceTarget='';
   frame.addEventListener('load',()=>{
-    inputGeneration++;
+    inputGeneration++;lastCanvasPointer=null;
     const doc=frame.contentDocument;
     for(const event of ['pointerdown','keydown','beforeinput','compositionstart','paste']){
-      doc?.addEventListener(event,()=>{inputGeneration++;},{capture:true,signal:abort.signal});
+      doc?.addEventListener(event,e=>{
+        inputGeneration++;
+        if(event==='pointerdown'){
+          const rect=e.target.localName==='canvas'?e.target.getBoundingClientRect():null;
+          lastCanvasPointer=rect&&rect.width&&rect.height?{
+            doc:currentDocument,x:(e.clientX-rect.left)/rect.width,y:(e.clientY-rect.top)/rect.height
+          }:null;
+        }else if(event==='keydown'&&(e.key==='Tab'||e.key==='Escape'||e.altKey||((e.ctrlKey||e.metaKey)&&['f','h','o','p'].includes(e.key.toLowerCase())))){
+          lastCanvasPointer=null;
+        }
+      },{capture:true,signal:abort.signal});
     }
   },{signal:abort.signal});
   frame.codiVoiceCapture=()=>{
@@ -371,7 +381,15 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
     if(!valid())return null;
     async function bookmark(){
       const ui=await refresh();
-      if(!valid()||ui.dialog||ui.ui?.backstage||!ui.focused||!ui.caret)throw Error('Select the WordCraft document text and try dictation again.');
+      // Opening the desktop launcher blurs egui. Keep a pointer selection
+      // made on the document page eligible after that focus transfer.
+      let inPage=false;
+      if(lastCanvasPointer?.doc===doc&&ui.canvasRect){
+        const px=lastCanvasPointer.x*ui.window[0],py=lastCanvasPointer.y*ui.window[1];
+        const contains=([x,y,w,h])=>px>=x&&px<x+w&&py>=y&&py<y+h;
+        inPage=contains(ui.canvasRect)&&ui.pages.some(contains);
+      }
+      if(!valid()||ui.dialog||ui.ui?.backstage||(!ui.focused&&!inPage)||!ui.caret)throw Error('Select the WordCraft document text and try dictation again.');
       const revision=activeState().revision;
       const {anchor,focus}=await api().request('engine.execute',{command:'document.selection',params:{},doc:Number(doc)});
       return JSON.stringify([doc,revision,anchor,focus]);
