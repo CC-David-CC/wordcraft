@@ -49,10 +49,6 @@ impl WordApp {
         {
             return self.request_host_document("file.saveAs", params);
         }
-        // While Markdown Source is open, Undo and Redo work on its typing, as Ctrl+Z does there.
-        if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
-            return crate::md_source::undo(self, id == "edit.redo");
-        }
         // Undo and Redo act on whole steps: a SmartArt typing run still open is folded into its one step first,
         // or Undo would take back only the last keystroke of it.
         if matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {

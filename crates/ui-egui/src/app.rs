@@ -319,9 +319,6 @@ impl WordApp {
             // resume. User input cannot mutate the document during quiescence.
             ctx.input_mut(|input| input.events.clear());
         }
-        // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
-        // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
-        ctx.add_plugin(super::a11y::FocusGuard);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
