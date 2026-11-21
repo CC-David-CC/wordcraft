@@ -35,10 +35,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use craft_web_host::web::{FileData, Host, Message};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use craft::host::{FileError, Files, PickId, PickRequest, Picked};
+use craft::platform::browser_files::BrowserFiles;
+use craft::platform::open::{DropTarget, DroppedFile, IntakeSender};
+use craft::web_host::{Mode, web::{FileData, Host, Message}};
 use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
-use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
-use wordcraft_ui_egui::{Inbox, Services, WordApp};
+use wordcraft_ui_egui::{HostSaveContext, Services, WordApp};
 
 /// The app id in the host messages (`wordcraft:ready`).
 const APP: &str = "wordcraft";
@@ -68,26 +74,21 @@ impl Bridge {
 
     /// Hand saved and exported files to the host instead of downloading them, report unsaved
     /// changes to it, and hear the files it sends.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        let saves = services.async_saves.clone().unwrap_or_default();
-        self.listen(inbox, ctx.clone(), saves.clone());
-        self.listen_failures(ctx.clone(), saves.clone());
-        let (bridge, pending, repaint) = (self.clone(), saves.clone(), ctx.clone());
-        services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool, context: &wordcraft_ui_egui::HostSaveContext| {
-            bridge.post_save(name, bytes, save_as, Some(context), &pending, &repaint)
+    pub fn connect(&self, services: &mut Services, intake: IntakeSender, ctx: egui::Context, files: Arc<HostedFiles>) {
+        let document_host = web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .is_some_and(|search| search.trim_start_matches('?').split('&').any(|part| part == "documentHost=1"));
+        self.listen(intake, ctx.clone(), files.clone());
+        self.listen_results(ctx.clone(), files.clone());
+        let bridge = self.clone();
+        services.host_save = Some(Box::new(move |name, bytes, save_as, context| {
+            bridge.post_save(name, bytes, save_as, context, document_host, &files, &ctx)
         }));
-        // Exports also require a result, but do not become the document's source.
-        let (bridge, pending, repaint) = (self.clone(), saves.clone(), ctx);
-        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes, false, None, &pending, &repaint)));
-        services.async_saves = Some(saves);
         // The crate does not repeat a state it already reported.
         let host = self.host.clone();
         services.on_dirty = Some(Box::new(move |dirty: bool| host.post_dirty(dirty)));
         // External document-window ownership is opt-in; other embeddings keep
         // their existing native file picker and window behavior.
-        let document_host = web_sys::window()
-            .and_then(|w| w.location().search().ok())
-            .is_some_and(|search| search.trim_start_matches('?').split('&').any(|part| part == "documentHost=1"));
         if document_host {
             let bridge = self.clone();
             services.host_document = Some(Box::new(move |request| {
@@ -115,7 +116,7 @@ impl Bridge {
 
     fn post_document_event(&self, kind: &str, value: &JsValue) -> Result<(), String> {
         let event_type = format!("wordcraft:document-{kind}");
-        if self.host.mode() == craft_web_host::Mode::Parent {
+        if self.host.mode() == Mode::Parent {
             js_sys::Reflect::set(value, &"type".into(), &event_type.into()).map_err(|_| "Could not encode document state")?;
             let window = web_sys::window().ok_or("Host page unavailable")?;
             let parent = window.parent().map_err(|_| "Host page unavailable")?.ok_or("Host page unavailable")?;
@@ -147,45 +148,28 @@ impl Bridge {
     }
 
     fn post_save(
-        &self,
-        path: &str,
-        bytes: &[u8],
-        save_as: bool,
-        context: Option<&wordcraft_ui_egui::HostSaveContext>,
-        saves: &AsyncSaves,
-        ctx: &egui::Context,
-    ) -> Result<(), String> {
-        if saves.pending() >= 8 {
-            return Err("Too many unconfirmed host saves; wait for their results.".into());
-        }
-        let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-        let ticket = saves.start();
-        let id = format!("wordcraft-save-{ticket}");
-        if let Err(error) = self.post_identified_save(&name, bytes, &id, save_as, context) {
-            saves.finish(ticket, SaveOutcome::Failed(error.clone()));
+        &self, path: &str, bytes: &[u8], save_as: bool, context: &HostSaveContext, document_host: bool,
+        files: &Arc<HostedFiles>, ctx: &egui::Context,
+    ) -> Result<PickId, String> {
+        let window = web_sys::window().ok_or_else(|| "The host page is gone".to_string())?;
+        let name = Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path);
+        let ticket = files.reserve(name, context.document_save, document_host && context.document_save)?;
+        let id = format!("wordcraft-save-{}", ticket.0);
+        if let Err(error) = self.post_identified_save(name, bytes, &id, save_as, context) {
+            files.forget(ticket);
             return Err(error);
         }
-        // Silence is not success. Timeout retains unsaved work and reports uncertainty;
-        // a host must never blindly retry a mutation whose reply was lost.
-        let (pending, repaint) = (saves.clone(), ctx.clone());
+        let (pending, repaint) = (files.clone(), ctx.clone());
         let timeout = Closure::once_into_js(move || {
-            pending.finish(
-                ticket,
-                SaveOutcome::Failed("Save confirmation did not arrive. It may have completed; check the account file before retrying.".into()),
-            );
+            pending.finish(ticket, Picked::Failed(
+                "Save confirmation did not arrive. It may have completed; check the account file before retrying.".into()
+            ));
             repaint.request_repaint();
         });
-        let scheduled = web_sys::window()
-            .ok_or_else(|| "The host page is gone".to_string())?
-            .set_timeout_with_callback_and_timeout_and_arguments_0(timeout.unchecked_ref(), 120_000);
-        if scheduled.is_err() {
-            saves.finish(
-                ticket,
-                SaveOutcome::Failed("Save was sent but its confirmation timer failed; check the account file before retrying.".into()),
-            );
-            return Err("Save outcome is unknown; confirmation timer unavailable.".into());
+        if window.set_timeout_with_callback_and_timeout_and_arguments_0(timeout.unchecked_ref(), 120_000).is_err() {
+            files.finish(ticket, Picked::Failed("Save was sent but its confirmation timer failed; check the account file before retrying.".into()));
         }
-        Ok(())
+        Ok(ticket)
     }
 
     /// Add document/revision identity at the real serialization boundary. The generic
@@ -196,7 +180,7 @@ impl Bridge {
         bytes: &[u8],
         id: &str,
         save_as: bool,
-        context: Option<&wordcraft_ui_egui::HostSaveContext>,
+        context: &HostSaveContext,
     ) -> Result<(), String> {
         let value = js_sys::Object::new();
         let buffer = js_sys::Uint8Array::from(bytes).buffer();
@@ -207,14 +191,12 @@ impl Bridge {
         set("bytes", buffer.clone().into())?;
         set("id", id.into())?;
         set("saveAs", save_as.into())?;
-        if let Some(context) = context {
-            set("documentId", context.document.to_string().into())?;
-            set("revision", context.revision.to_string().into())?;
-            set("operation", context.operation.as_str().into())?;
-            set("documentSave", context.document_save.into())?;
-            set("path", context.path.as_str().into())?;
-        }
-        if self.host.mode() == craft_web_host::Mode::Parent {
+        set("documentId", context.document.to_string().into())?;
+        set("revision", context.revision.to_string().into())?;
+        set("operation", context.operation.as_str().into())?;
+        set("documentSave", context.document_save.into())?;
+        set("path", context.path.as_str().into())?;
+        if self.host.mode() == Mode::Parent {
             set("type", "wordcraft:save".into())?;
             let window = web_sys::window().ok_or_else(|| "Host page unavailable".to_string())?;
             let parent = window.parent().map_err(|_| "Host page unavailable".to_string())?.ok_or_else(|| "Host page unavailable".to_string())?;
@@ -229,26 +211,20 @@ impl Bridge {
         }
     }
 
-    /// The base bridge has a positive acknowledgement. This explicit extension reports
-    /// failed/cancelled/uncertain storage without waiting for the timeout. The same
-    /// origin/source checks as the base parent transport apply; page mode uses its canvas.
-    fn listen_failures(&self, ctx: egui::Context, saves: AsyncSaves) {
-        let deliver = Rc::new(move |data: JsValue| {
+    /// Account writes reply with a canonical path or an explicit failure.
+    fn listen_results(&self, ctx: egui::Context, files: Arc<HostedFiles>) {
+        let deliver = Rc::new(move |kind: &str, data: JsValue| {
             let read = |key: &str| js_sys::Reflect::get(&data, &JsValue::from_str(key)).ok().and_then(|v| v.as_string());
             let Some(ticket) = read("id").as_deref().and_then(save_ticket) else { return };
-            if read("type").as_deref() == Some("wordcraft:save-result") {
-                match read("path").filter(|path| valid_source_path(path)) {
-                    Some(path) => saves.finish(ticket, SaveOutcome::SavedWithPath(path)),
-                    None => saves.finish(ticket, SaveOutcome::Failed("Host save result has no canonical source path.".into())),
-                }
+            if kind == "wordcraft:save-result" {
+                files.accept(ticket, read("path").filter(|path| valid_source_path(path)).map(PathBuf::from));
             } else {
                 let error = read("error").unwrap_or_else(|| "The host could not confirm this save.".into());
-                let error: String = error.chars().take(1024).collect();
-                saves.finish(ticket, SaveOutcome::Failed(error));
+                files.finish(ticket, Picked::Failed(error.chars().take(1024).collect()));
             }
             ctx.request_repaint();
         });
-        if self.host.mode() == craft_web_host::Mode::Parent {
+        if self.host.mode() == Mode::Parent {
             let Some(window) = web_sys::window() else { return };
             let Some(parent) = window.parent().ok().flatten() else { return };
             let Ok(origin) = window.location().origin() else { return };
@@ -257,31 +233,32 @@ impl Bridge {
                     return;
                 }
                 let data = event.data();
-                if matches!(
-                    js_sys::Reflect::get(&data, &JsValue::from_str("type")).ok().and_then(|v| v.as_string()).as_deref(),
-                    Some("wordcraft:save-failed" | "wordcraft:save-result")
-                ) {
-                    deliver(data);
+                if let Some(kind) = js_sys::Reflect::get(&data, &JsValue::from_str("type")).ok().and_then(|v| v.as_string())
+                    && matches!(kind.as_str(), "wordcraft:save-failed" | "wordcraft:save-result")
+                {
+                    deliver(&kind, data);
                 }
             });
             if window.add_event_listener_with_callback("message", listener.as_ref().unchecked_ref()).is_ok() {
                 listener.forget();
             }
         } else {
-            let listener = Closure::<dyn Fn(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| deliver(event.detail()));
-            if self.canvas.add_event_listener_with_callback("wordcraft:save-failed", listener.as_ref().unchecked_ref()).is_ok() {
-                listener.forget();
+            for kind in ["wordcraft:save-failed", "wordcraft:save-result"] {
+                let deliver = deliver.clone();
+                let listener = Closure::<dyn Fn(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| deliver(kind, event.detail()));
+                if self.canvas.add_event_listener_with_callback(kind, listener.as_ref().unchecked_ref()).is_ok() {
+                    listener.forget();
+                }
             }
         }
     }
 
-    /// Hear `wordcraft:open` and queue the file like a dropped one.
-    fn listen(&self, inbox: Inbox, ctx: egui::Context, saves: AsyncSaves) {
+    fn listen(&self, intake: IntakeSender, ctx: egui::Context, files: Arc<HostedFiles>) {
         self.host.listen(move |message| match message {
-            Message::Open { name, data } => deliver_open(&inbox, &ctx, &name, &data),
+            Message::Open { name, data } => deliver_open(&intake, &name, &data),
             Message::Saved { id } => {
                 if let Some(ticket) = save_ticket(&id) {
-                    saves.finish(ticket, SaveOutcome::Saved);
+                    files.accept(ticket, None);
                     ctx.request_repaint();
                 }
             }
@@ -290,8 +267,8 @@ impl Bridge {
     }
 }
 
-fn save_ticket(id: &str) -> Option<u64> {
-    id.strip_prefix("wordcraft-save-")?.parse().ok()
+fn save_ticket(id: &str) -> Option<PickId> {
+    id.strip_prefix("wordcraft-save-")?.parse().ok().map(PickId)
 }
 
 fn valid_source_path(path: &str) -> bool {
@@ -302,11 +279,11 @@ fn valid_source_path(path: &str) -> bool {
         && !path.split('/').any(|part| part.is_empty() || matches!(part, "." | "..") || part.chars().any(|c| c.is_control() || c == '\\'))
 }
 
-/// The file an open message carries, pushed onto the inbox for the next frame, like a dropped
-/// file. A host's file is untrusted input: an oversized one is refused before it is copied into
-/// the app's memory (the data's own length, not the host's claim). The crate has cleaned the name
-/// (and cut it to 255 characters); a blank one comes as `document` and becomes `Document.docx`.
-fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData) {
+/// The file an open message carries, queued for the next frame like a dropped file. A host's file
+/// is untrusted input: an oversized one is refused before it is copied into the app's memory (the
+/// data's own length, not the host's claim). The crate has cleaned the name (and cut it to 255
+/// characters); a blank one comes as `document` and becomes `Document.docx`.
+fn deliver_open(intake: &IntakeSender, name: &str, data: &FileData) {
     let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
     let FileData::Bytes(array) = data else {
         log::warn!("host file {name} came as a File; WordCraft reads bytes only; not opened");
@@ -316,6 +293,112 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
         log::warn!("host file is {} bytes, over the {} MiB host open limit; not opened", data.size(), MAX_OPEN_BYTES >> 20);
         return;
     }
-    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, array.to_vec()));
-    ctx.request_repaint();
+    let file = DroppedFile { path: None, name, bytes: Some(Arc::from(array.to_vec())) };
+    intake.dropped(vec![file], DropTarget::Elsewhere);
+}
+
+/// A pending write and the acknowledgement needed to release it.
+struct SaveReply {
+    name: String,
+    document_save: bool,
+    canonical: bool,
+    result: Option<Picked>,
+}
+
+pub struct HostedFiles {
+    inner: Arc<BrowserFiles>,
+    replies: Mutex<HashMap<u64, SaveReply>>,
+}
+
+impl HostedFiles {
+    pub fn new(inner: Arc<BrowserFiles>) -> Self {
+        Self { inner, replies: Mutex::new(HashMap::new()) }
+    }
+
+    fn reserve(&self, name: &str, document_save: bool, canonical: bool) -> Result<PickId, String> {
+        let mut replies = self.replies.lock().unwrap_or_else(|e| e.into_inner());
+        if replies.len() >= 8 {
+            return Err("Too many unconfirmed host saves; wait for their results.".into());
+        }
+        // Like the framework's hosted adapter, reserve an ID without opening a picker.
+        let ticket = self.inner.pick(PickRequest::folder("hosted-save"));
+        self.inner.forget(ticket);
+        replies.insert(ticket.0, SaveReply { name: name.into(), document_save, canonical, result: None });
+        Ok(ticket)
+    }
+
+    fn finish(&self, id: PickId, result: Picked) {
+        let mut replies = self.replies.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(reply) = replies.get_mut(&id.0)
+            && reply.result.is_none()
+        {
+            reply.result = Some(result);
+        }
+    }
+
+    fn accept(&self, id: PickId, path: Option<PathBuf>) {
+        let mut replies = self.replies.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(reply) = replies.get_mut(&id.0).filter(|r| r.result.is_none()) else { return };
+        reply.result = Some(if !reply.document_save {
+            Picked::Downloaded(reply.name.clone())
+        } else if let Some(path) = path {
+            Picked::Paths(vec![path])
+        } else if reply.canonical {
+            Picked::Failed("Host save result has no canonical source path.".into())
+        } else {
+            Picked::Paths(vec![PathBuf::from(&reply.name)])
+        });
+    }
+}
+
+impl Files for HostedFiles {
+    fn pick(&self, request: PickRequest) -> PickId {
+        self.inner.pick(request)
+    }
+
+    fn take_answer(&self, id: PickId) -> Option<Picked> {
+        let mut replies = self.replies.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(reply) = replies.get_mut(&id.0) {
+            let answer = reply.result.take()?;
+            replies.remove(&id.0);
+            return Some(answer);
+        }
+        self.inner.take_answer(id)
+    }
+
+    fn forget(&self, id: PickId) {
+        if self.replies.lock().unwrap_or_else(|e| e.into_inner()).remove(&id.0).is_none() {
+            self.inner.forget(id);
+        }
+    }
+
+    fn pick_pending(&self) -> bool {
+        self.inner.pick_pending()
+    }
+
+    fn read(&self, path: &Path) -> Result<Vec<u8>, FileError> {
+        self.inner.read(path)
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
+        self.inner.write(path, bytes)
+    }
+
+    fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
+        self.inner.last_folder(purpose)
+    }
+
+    fn save(&self, _request: PickRequest, _bytes: Vec<u8>) -> PickId {
+        // Hosted writes require the document identity supplied through Services::host_save.
+        // BrowserFiles answers folder requests with Unavailable without presenting a picker.
+        self.inner.pick(PickRequest::folder("hosted-save"))
+    }
+
+    fn can_pick(&self) -> bool {
+        false
+    }
+
+    fn browser_saves(&self) -> bool {
+        true
+    }
 }
