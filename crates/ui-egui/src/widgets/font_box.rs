@@ -1,8 +1,9 @@
 //! The font box: Word's plain font picker over the app's catalog and its one recent-fonts list.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use craft::font_manager::Catalog;
+use craft::font_manager::craft_font_catalog::Limits;
+use craft::font_manager::{Catalog, Source};
 use craft::font_manager::picker::{FontPicker, FontPickerKind, FontPickerOutput, FontPickerSettings, MissingAdvice};
 use craft::ui::contract::{Bind, Show as _};
 use craft::ui::runtime::env::Label;
@@ -80,9 +81,9 @@ pub fn font_picker<'a>(
 pub fn font_box(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>, family: &mut String) -> FontPickerOutput {
     let warning = app.font_box_warning(family);
     let rows = actions();
-    let catalog = Catalog::global();
+    let catalog = app.font_catalog();
     // PLAN: assumed `UiState::font_picker: FontPickerSettings`, replacing `recent_fonts` (app-hub).
-    let out = font_picker(label, Bind::bound(family), catalog, Bind::bound(&mut app.ui.font_picker), &rows, warning.as_deref()).show(ui);
+    let out = font_picker(label, Bind::bound(family), &catalog, Bind::bound(&mut app.ui.font_picker), &rows, warning.as_deref()).show(ui);
     if let Some(command) = out.action.and_then(action_command) {
         let _ = app.run(command, json!({}));
     }
@@ -92,7 +93,19 @@ pub fn font_box(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>, family:
 impl WordApp {
     /// The font catalog every font box lists: the process's one catalog.
     pub(crate) fn font_catalog(&self) -> Arc<Catalog> {
-        Arc::clone(Catalog::global())
+        static REGISTERED: OnceLock<()> = OnceLock::new();
+        let catalog = Catalog::global();
+        REGISTERED.get_or_init(|| {
+            let limits = Limits::default();
+            let bundled = wordcraft_fonts::bundled().iter().copied();
+            let craft = wordcraft_fonts::CRAFT_FONTS.iter().map(|font| font.bytes);
+            for bytes in bundled.chain(craft) {
+                if let Err(error) = catalog.add_bytes(bytes.to_vec(), Source::Bundled, &limits) {
+                    log::warn!("Could not list a bundled WordCraft font: {error}");
+                }
+            }
+        });
+        Arc::clone(catalog)
     }
 
     /// The font pickers' remembered state: stars and the one recent-fonts list.
