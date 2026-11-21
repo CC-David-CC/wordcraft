@@ -874,10 +874,13 @@ fn modify_style_font_box_finds_the_family() {
     // Autocomplete offers loaded families; the requested-but-unavailable Aptos
     // name above remains truthful in the field but is not a synthetic choice.
     h.event(egui::Event::Text("source serif".into()));
-    h.step();
-    // The font popup handles Enter to pick the highlighted family. Confirm the
-    // dialog separately after checking that the picker resolved the typed prefix.
-    h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+    h.run_steps(2);
+    h.get(By::new().label("Source Serif 4").predicate(|node| !node.is_hidden()));
+    // A filtered list opens without a selected row. Move to the match before
+    // pressing Enter, then confirm the complete style with the OK button.
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
     h.run_steps(2);
     h.get(
         By::new()
