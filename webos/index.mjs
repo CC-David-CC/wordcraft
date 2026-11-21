@@ -137,7 +137,7 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
     const done=completion(id);if(done.started)return;done.started=true;let admitted=false;
     try {
       check();
-      if(!loaded||!decimal(documentId)||documentId!==currentDocument||!decimal(message.revision)||!validName(message.name)||!(message.bytes instanceof ArrayBuffer)||message.bytes.byteLength>MAX_FILE||typeof message.saveAs!=='boolean'||typeof message.documentSave!=='boolean'||!['file.save','file.saveAs','file.exportPdf','file.exportPng','file.printPdf'].includes(message.operation))throw Error('Invalid identified WordCraft save.');
+      if(!loaded||!decimal(documentId)||documentId!==currentDocument||!decimal(message.revision)||!validName(message.name)||!(message.bytes instanceof ArrayBuffer)||message.bytes.byteLength>MAX_FILE||typeof message.saveAs!=='boolean'||typeof message.documentSave!=='boolean'||!['file.save','file.saveAs','file.exportCopy','file.exportPdf','file.exportPng','file.printPdf'].includes(message.operation))throw Error('Invalid identified WordCraft save.');
       const original=bindings.get(documentId),resourceId=original?.path||'draft:'+documentId;
       if(await authorize(authority,{instanceId,sessionId,documentId,operation:message.operation,resourceId})!==true)throw Error('Save is not authorized.');
       check();if((bindings.get(documentId)?.path||'draft:'+documentId)!==resourceId)throw Error('Document resource changed during save authorization.');
@@ -149,6 +149,7 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
         if(destination!==original.path&&destination!==original.path.split('/').at(-1))throw Error('Save target differs from the confirmed account file.');
         destination=original.path;
       } else if(!destination) throw Error('Save requires an explicit relative account path.');
+      if(message.operation==='file.exportCopy'&&(message.documentSave||destination===original?.path))throw Error('Choose a different account path for the exported copy.');
       if(needsCopy&&destination===original?.path)throw Error('The saved base changed or could not be verified. Use Save As to keep this recovered copy.');
       status.textContent='Saving to your account…';
       const saved=await files.write(destination,new Blob([message.bytes]),destination===original?.path?original.sha256:null,{signal:abort.signal});check();
@@ -181,6 +182,19 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
     if(command==='file.new'){if(typeof newDocument!=='function')throw Error('Desktop document launch is unavailable.');return newDocument(params);}
     if(command==='file.close'){if(typeof closeView!=='function')throw Error('Desktop close is unavailable.');return closeView();}
     if(command==='file.saveAs')return saveDocument(true);
+    if(command==='file.exportCopy'){
+      if(!validName(params.path))throw Error('Invalid export filename.');
+      const dot=params.path.lastIndexOf('.');
+      const extension=params.path.slice(dot).toLowerCase();
+      if(dot<1||!['.pdf','.docx','.xml','.odt','.ott','.fodt','.rtf','.html','.md','.tex','.txt','.png'].includes(extension))throw Error('Unsupported export format.');
+      const documentId=currentDocument;
+      const path=await dialogs.path('Documents/'+params.path);check();
+      if(path===null)return {status:'cancelled'};
+      if(documentId!==currentDocument)throw Error('The document changed while choosing an export destination.');
+      if(!path.toLowerCase().endsWith(extension))throw Error('The export path must end with '+extension+'.');
+      if(path===bindings.get(currentDocument)?.path)throw Error('Choose a different account path for the exported copy.');
+      return nativeCommand(command,{path,format:params.format});
+    }
     if(command==='file.open'||command==='ui.openFileDialog'){
       if(typeof params.data==='string') {
         if(params.data.length>Math.ceil(MAX_FILE/3)*4||!validName(params.path?.split('/').at(-1)))throw Error('Invalid imported document.');

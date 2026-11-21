@@ -303,27 +303,16 @@ impl WordApp {
                     self.clear_export_error();
                     return Ok(json!({"cancelled": true}));
                 };
-                let r = if ext == "png" {
-                    self.run("file.exportPng", json!({"path": path}))
-                } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
-                    // The engine takes an explicit format only for an .xml path, and a system Save
-                    // dialog lets the user type any name: give it the extension
-                    // (`notes.docx` becomes `notes.xml`, `notes.v2` `notes.v2.xml`).
-                    let named = crate::print_page::export_name(&path, "xml");
-                    if named != path {
-                        path = named;
-                        // The dialog only confirmed the name it was given, not this one.
-                        if std::path::Path::new(&path).exists() {
-                            // Callers drop the result, so say it where the person sees it.
-                            return Err(self.fail_export(format!("{path} already exists; choose another name")));
-                        }
+                let suffix = crate::print_page::export_file_ext(&ext);
+                let named = crate::print_page::export_name(&path, suffix);
+                if named != path {
+                    path = named;
+                    if std::path::Path::new(&path).exists() {
+                        return Err(self.fail_export(format!("{path} already exists; choose another name")));
                     }
-                    // Word XML even over a Word 2003 XML file, which a save by path would keep.
-                    let format = if ext == "xml" { wordcraft_engine::cmd::file::FORMAT_FLAT_OPC } else { crate::print_page::EXPORT_WORD_2003 };
-                    self.run("file.saveAs", json!({"path": path, "format": format}))
-                } else {
-                    self.run("file.saveAs", json!({"path": path}))
-                };
+                }
+                let params = export_copy_params(&ext, path.clone());
+                let r = self.run("file.exportCopy", params);
                 match &r {
                     Ok(_) => {
                         self.clear_export_error();
@@ -486,6 +475,18 @@ impl WordApp {
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
         let req = self.export_request(ext);
+        if self.browser_saves() {
+            let name = req.file_name.clone().expect("export has a suggested name");
+            let result = if self.services.host_document.is_some() {
+                self.request_host_document("file.exportCopy", export_copy_params(ext, name))
+            } else {
+                self.run("file.exportCopy", export_copy_params(ext, name))
+            };
+            if let Err(error) = result {
+                self.fail_export(error);
+            }
+            return;
+        }
         // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
         let _ = self.ask_file(req, AfterPick::Export { ext: ext.to_string() });
     }
@@ -540,6 +541,14 @@ impl WordApp {
         } else {
             self.status(tl!("All system fonts are already available."));
         }
+    }
+}
+
+fn export_copy_params(ext: &str, path: String) -> Value {
+    if ext == crate::print_page::EXPORT_WORD_2003 {
+        json!({"path": path, "format": wordcraft_engine::cmd::file::FORMAT_WORD_2003})
+    } else {
+        json!({"path": path})
     }
 }
 

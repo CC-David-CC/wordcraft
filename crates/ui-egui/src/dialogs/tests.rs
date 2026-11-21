@@ -861,7 +861,8 @@ fn modify_style_font_box_finds_the_family() {
     h.run_steps(3);
     h.get(
         By::new()
-            .role(egui::accesskit::Role::TextInput)
+            .role(egui::accesskit::Role::ComboBox)
+            .label("Font:")
             .value(wordcraft_doc::styles::BODY_FONT)
             .predicate(|node| !node.is_hidden()),
     )

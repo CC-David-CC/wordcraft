@@ -146,7 +146,7 @@ impl WordApp {
             // cancel pending pickers, change Recent or restart the caret blink.
             return self.session.run(id, &params).map_err(|e| e.to_string());
         }
-        if matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng" | "file.printPdf")
+        if matches!(id, "file.save" | "file.saveAs" | "file.exportCopy" | "file.exportPdf" | "file.exportPng" | "file.printPdf")
             && let Err(error) = panes::flush_comment_drafts(self)
         {
             // A protected comment draft stays unsaved beside the document; it
@@ -184,11 +184,17 @@ impl WordApp {
             return r;
         }
         // The browser and the account host both complete saves through the same pending-write queue.
-        if self.browser_saves() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng" | "file.printPdf") {
+        if self.browser_saves() && matches!(id, "file.save" | "file.saveAs" | "file.exportCopy" | "file.exportPdf" | "file.exportPng" | "file.printPdf") {
+            if id == "file.exportCopy" && params.get("path").and_then(Value::as_str).is_none() {
+                return Err("Export requires a destination".into());
+            }
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
             // Inspect only the suffix bytes: no full-name allocation or UTF-8 slicing.
             let has_pdf_suffix = name.as_bytes().last_chunk::<4>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".pdf"));
             let name = if matches!(id, "file.exportPdf" | "file.printPdf") && !has_pdf_suffix { format!("{name}.pdf") } else { name };
+            if id == "file.exportCopy" && self.session.path.as_deref() == Some(std::path::Path::new(&name)) {
+                return Err("Export requires a different destination from the open document.".into());
+            }
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
@@ -212,8 +218,11 @@ impl WordApp {
                 self.session.stamp_save();
             }
             // Word documents are encrypted with the document's password, if it has one.
-            let password =
-                if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
+            let password = if matches!(id, "file.save" | "file.saveAs" | "file.exportCopy") {
+                self.session.password.as_ref().map(wordcraft_engine::Password::as_str)
+            } else {
+                None
+            };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
             let encoded = if id == "file.printPdf" {
                 self.session.print_pdf(&params).map(|(bytes, _)| bytes).map_err(|error| error.to_string())
@@ -274,7 +283,11 @@ impl WordApp {
                     }
                 }
             } else {
-                let request = PickRequest::save("document").file_name(name.clone()).save_as(marked_saved && new_file);
+                let request = if id == "file.exportCopy" {
+                    PickRequest::save("export").file_name(name.clone())
+                } else {
+                    PickRequest::save("document").file_name(name.clone()).save_as(marked_saved && new_file)
+                };
                 self.host.files().save(request, bytes)
             };
             if marked_saved {
@@ -474,6 +487,7 @@ impl WordApp {
             "file.save"
                 | "file.saveAs"
                 | "file.saveTemplate"
+                | "file.exportCopy"
                 | "file.exportPdf"
                 | "file.exportPng"
                 | "file.printPdf"
@@ -1416,6 +1430,7 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
             | "file.saveAs"
             | "file.saveTemplate"
             | "file.open"
+            | "file.exportCopy"
             | "file.exportPdf"
             | "file.exportPng"
             | "file.print"

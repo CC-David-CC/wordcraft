@@ -488,6 +488,8 @@ mod tests {
             h.run_steps(4);
             h.get_by_label(label).click();
             h.run_steps(4);
+            assert_eq!(h.state().session.path.as_deref(), Some(std::path::Path::new("Source.docx")), "{label}: export preserves the open document");
+            assert!(h.state().session.dirty, "{label}: export preserves pending edits");
             let requests = files.requests();
             assert_eq!(requests.len(), 1, "{label}: exactly one picker request: {requests:?}");
             let name = requests[0].file_name.as_deref().expect("suggested export name");

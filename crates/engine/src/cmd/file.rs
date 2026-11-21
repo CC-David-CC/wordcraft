@@ -106,6 +106,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
             .params(r#"{"password": string (Word packages and OpenDocument text files (.odt, .ott) are saved encrypted with it) | null or "" (saved unencrypted)}"#)
             .pure(),
+        CommandSpec::new("file.exportCopy", "Export Copy", "File › Export", export_copy)
+            .params(r#"{"path": string, "format"?: "wordml2003" | "flatopc"}"#)
+            .pure(),
         CommandSpec::new("file.exportPdf", "Export PDF", "File › Export", |s, v| {
             // No path (the command search, say): the app asks where to save, as File › Export
             // does, instead of failing on the required parameter (#2313).
@@ -503,6 +506,19 @@ fn save_as(s: &mut Session, v: &Value) -> CmdResult {
         return Ok(json!({"saved": false}));
     }
     save(s, v)
+}
+
+fn export_copy(s: &mut Session, v: &Value) -> CmdResult {
+    let path = p::req_str(v, "path")?;
+    let destination = std::path::Path::new(path);
+    if s.path.as_deref() == Some(destination) {
+        return Err(CmdError::Params("Export requires a different destination from the open document".into()));
+    }
+    let opts = export_options(s, v);
+    let copy = super::insert::saved_copy(s);
+    let password = s.password.as_ref().map(crate::io::Password::as_str);
+    crate::io::save_path_with(destination, copy.as_ref().unwrap_or(&s.doc), password, &opts).map_err(CmdError::Failed)?;
+    Ok(json!({"path": path, "exported": true}))
 }
 
 /// How a copy is written: Print Markup from the command's `markup`, else the File › Print
