@@ -261,22 +261,18 @@ fn focus_esc_collapses_the_selection_first_then_leaves() {
     assert!(!h.state().session.view.focus_mode, "the second Escape leaves Focus");
 }
 
-/// The Options toggle hides the community pill in the title bar; the backstage menu's
-/// Discord link hides with it — one setting, everywhere the link shows.
-///
-/// The File page fills the window in place of the title bar (`AppShell::page`, ch.C5), so the title bar's button is
-/// read in the editor window and the link on the File page.
+/// WebOS keeps the community link on About and omits the title bar and File menu shortcuts.
 #[test]
-fn the_community_button_off_hides_the_backstage_discord_link_too() {
+fn community_shortcuts_stay_hidden_in_the_webos_window() {
     for show in [true, false] {
         let mut a = app();
         a.ui.show_discord = show;
         let mut h = harness(a);
         h.run_steps(2);
-        assert_eq!(h.query_by_label(DISCORD_TITLE_NAME).is_some(), show, "show {show}: the title bar's community button follows the setting");
+        assert!(h.query_by_label(DISCORD_TITLE_NAME).is_none(), "show {show}: the title bar omits the shortcut");
         h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
         h.run_steps(2);
-        assert_eq!(h.query_by_label(DISCORD_LINK_NAME).is_some(), show, "show {show}: the File page's link honors the same setting");
+        assert!(h.query_by_label(DISCORD_LINK_NAME).is_none(), "show {show}: the File menu omits the shortcut");
     }
 }
 

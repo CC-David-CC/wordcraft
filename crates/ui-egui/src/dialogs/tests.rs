@@ -859,7 +859,13 @@ fn modify_style_font_box_finds_the_family() {
         app,
     );
     h.run_steps(3);
-    h.get(By::new().role(egui::accesskit::Role::TextInput).value(wordcraft_doc::styles::BODY_FONT)).focus();
+    h.get(
+        By::new()
+            .role(egui::accesskit::Role::TextInput)
+            .value(wordcraft_doc::styles::BODY_FONT)
+            .predicate(|node| !node.is_hidden()),
+    )
+    .focus();
     h.step();
     let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
     h.event(key(egui::Key::A, egui::Modifiers::COMMAND));

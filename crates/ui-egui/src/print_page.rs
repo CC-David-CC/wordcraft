@@ -489,7 +489,7 @@ mod tests {
             h.get_by_label(label).click();
             h.run_steps(4);
             let requests = files.requests();
-            assert_eq!(requests.len(), 1, "{label}: exactly one output");
+            assert_eq!(requests.len(), 1, "{label}: exactly one picker request: {requests:?}");
             let name = requests[0].file_name.as_deref().expect("suggested export name");
             let bytes = files.file(std::path::Path::new(name)).expect("recorded export contents");
             let bytes = bytes.as_slice();
