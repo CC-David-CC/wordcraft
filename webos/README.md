@@ -188,7 +188,7 @@ follow-up does not inherit the previous milestone's native/browser results.
 
 In the WebOS document host, Design → Set as Default captures a versioned native
 formatting record and saves it through the existing authenticated account-file
-capability to `Digital Projects/WordCraft/defaults-v1.json`. This stores style
+capability to `Digital-Projects/WordCraft/defaults-v1.json`. This stores style
 definitions, document default character/paragraph formatting, theme fonts and
 theme colors. It does not store body text, headers, comments, sections, account
 credentials or document save identity; tracked style-edit history is excluded.

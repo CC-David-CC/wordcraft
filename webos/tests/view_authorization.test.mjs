@@ -326,7 +326,7 @@ test('native Open preserves newer typing instead of rejecting the gesture becaus
 
 test('account defaults load before blank creation but never on existing-file Open',async t=>{
   const defaults={version:1,styles:{styles:[]},majorFont:'Inter',minorFont:'Source Sans 3',themeColors:[[1,2,3]]};
-  const listing=async path=>({entries:path==='Digital Projects'?[{name:'WordCraft',directory:true}]:[{name:'defaults-v1.json',directory:false,bytes:200}]});
+  const listing=async path=>({entries:path===''?[{name:'Digital-Projects',directory:true}]:path==='Digital-Projects'?[{name:'WordCraft',directory:true}]:[{name:'defaults-v1.json',directory:false,bytes:200}]});
   const fresh=await fixture({list:listing,read:async()=>({sha256:'a'.repeat(64),data:new TextEncoder().encode(JSON.stringify(defaults))})});
   t.after(()=>fresh.view.dispose());
   const commands=fresh.startupCalls.filter(c=>c.method==='engine.execute');
@@ -343,11 +343,11 @@ test('Set as Default requires account authorization and acknowledges only confir
   assert.equal(denied.writes.length,0);
   const f=await fixture({dirty:true});t.after(()=>f.view.dispose());
   const saved=await f.view.execute({...f.request,command:'design.setDefault',args:{}},f.authority);
-  assert.equal(saved.committed,true);assert.equal(saved.path,'Digital Projects/WordCraft/defaults-v1.json');
+  assert.equal(saved.committed,true);assert.equal(saved.path,'Digital-Projects/WordCraft/defaults-v1.json');
   assert.equal(f.writes.length,1);assert.equal(f.writes[0].previous,null);
   assert.equal(f.view.lifecycle.snapshot().dirty,true,'saving defaults must not mark the document saved');
   assert.equal(f.calls.at(-1).args.command,'ui.hostDefaultsResult');assert.equal(f.calls.at(-1).args.params.saved,true);
-  assert(f.decisions.some(d=>d.request.resourceId==='Digital Projects/WordCraft/defaults-v1.json'));
+  assert(f.decisions.some(d=>d.request.resourceId==='Digital-Projects/WordCraft/defaults-v1.json'));
 });
 
 test('native ribbon defaults use the same storage path and failed writes never announce success',async t=>{
