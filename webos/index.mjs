@@ -151,11 +151,11 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
       } else if(!destination) throw Error('Save requires an explicit relative account path.');
       if(message.operation==='file.exportCopy'&&(message.documentSave||destination===original?.path))throw Error('Choose a different account path for the exported copy.');
       if(needsCopy&&destination===original?.path)throw Error('The saved base changed or could not be verified. Use Save As to keep this recovered copy.');
-      status.textContent='Saving to your account…';
+      status.textContent=(files.temporary ? 'Saving in this tab…' : 'Saving to your account…');
       const saved=await files.write(destination,new Blob([message.bytes]),destination===original?.path?original.sha256:null,{signal:abort.signal});check();
       if(!digest(saved?.sha256))throw Error('Server save confirmation is invalid.');
       if(message.documentSave){bindings.set(documentId,{path:destination,sha256:saved.sha256});needsCopy=false;changed();}
-      status.textContent='Saved to your account: '+destination;
+      status.textContent=(files.temporary ? 'Saved in this tab: ' : 'Saved to your account: ')+destination;
       reply(message.documentSave?'wordcraft:save-result':'wordcraft:saved',{id,...(message.documentSave?{path:destination}:{})});
       done.resolve({status:'saved',path:destination,sha256:saved.sha256,committed:true,documentSave:message.documentSave});
       void settleSave().then(()=>checkpoint()).catch(notify);
@@ -220,13 +220,13 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
       // Native parsing is authoritative and validates the version, size and styles.
       encodeDefaults(defaults);
       const validated=await api().request('engine.execute',{command:'design.validateDefaults',params:defaults,doc:Number(currentDocument)});check();
-      status.textContent='Saving default formatting to your account…';
+      status.textContent=(files.temporary ? 'Saving default formatting in this tab…' : 'Saving default formatting to your account…');
       const result=await writeDefaults(files,check,validated,{signal:abort.signal});check();
-      status.textContent='Default formatting saved to your account for new blank documents.';
+      status.textContent=(files.temporary ? 'Default formatting saved for this guest session.' : 'Default formatting saved to your account for new blank documents.');
       // A failed status repaint cannot undo a server-confirmed write or turn
       // its durable result into an unconfirmed save.
       try{await api().request('engine.execute',{command:'ui.hostDefaultsResult',params:{saved:true},doc:Number(currentDocument)});}
-      catch(error){check();status.textContent='Default formatting saved to your account. The editor could not display its confirmation.';}
+      catch(error){check();status.textContent=(files.temporary ? 'Default formatting saved in this tab.' : 'Default formatting saved to your account. The editor could not display its confirmation.');}
       check();
       return result;
     } catch(error) {
@@ -270,13 +270,13 @@ export function mount({instanceId, sessionId, resource = null, imported = null, 
         }else if(imported){
           if(!validName(imported.name)||typeof imported.data!=='string'||imported.data.length>Math.ceil(MAX_FILE/3)*4)throw Error('Invalid document import.');
           await api().request('engine.execute',{command:'file.open',params:{path:imported.name,data:imported.data,unsaved:true}});check();
-          status.textContent='Imported document; use Save As to save it to your account.';
+          status.textContent=(files.temporary ? 'Imported document. Use Save As to keep it in this tab.' : 'Imported document; use Save As to save it to your account.');
         }else{
           if(!['sample','letter','resume','report'].includes(template)){
             const defaults=await readDefaults(files,check);check();
             if(defaults){await api().request('engine.execute',{command:'design.loadDefaults',params:defaults.value});check();}
           }
-          await api().request('engine.execute',{command:'file.new',params:{template}});check();status.textContent='New document; not saved to your account.';
+          await api().request('engine.execute',{command:'file.new',params:{template}});check();status.textContent=(files.temporary ? 'New temporary document. Save to Files in this tab. Register to keep it before leaving.' : 'New document; not saved to your account.');
         }
       }
       await api().execute('ui.backstage',{value:false});check();await refresh();loaded=true;phase='ready';frame.inert=false;clearTimeout(startup);changed();readyResolve();
