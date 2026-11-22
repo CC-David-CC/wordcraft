@@ -74,15 +74,21 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 pub use craft_mime::transfer::base64 as base64_encode;
 
 pub(crate) fn picture(s: &mut Session, v: &Value) -> CmdResult {
-    let bytes = if let Some(d) = p::str(v, "data") {
-        base64_decode(d).ok_or_else(|| CmdError::Params("bad base64 data".into()))?
-    } else if let Some(path) = p::str(v, "path") {
-        crate::io::read_file(path).map_err(CmdError::Failed)?
-    } else {
+    let Some(bytes) = picture_input(v)? else {
         s.push_ui_request(json!({"open": "insertPicture"}));
         return sel_result(s);
     };
     place_picture(s, bytes, p::f32(v, "width"), p::str(v, "alt").unwrap_or(""))
+}
+
+pub(crate) fn picture_input(v: &Value) -> Result<Option<Vec<u8>>, CmdError> {
+    if let Some(d) = p::str(v, "data") {
+        base64_decode(d).map(Some).ok_or_else(|| CmdError::Params("bad base64 data".into()))
+    } else if let Some(path) = p::str(v, "path") {
+        crate::io::read_file(path).map(Some).map_err(CmdError::Failed)
+    } else {
+        Ok(None)
+    }
 }
 
 /// The media extension of an encoded image by its magic bytes, as the picture probe accepted it
@@ -104,19 +110,25 @@ pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
 /// script's next typing doesn't replace it (#965); Picture Format commands still act on it. The
 /// app selects a picture the person inserts (`WordApp::run`).
 fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str) -> CmdResult {
+    let (natural_w, natural_h, ext) = natural_picture_size(&bytes)?;
+    place_validated_picture(s, bytes, width, alt, natural_w, natural_h, ext)
+}
+
+pub(crate) fn natural_picture_size(bytes: &[u8]) -> Result<(f32, f32, &'static str), CmdError> {
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }
     // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802). A picture that
     // is never decoded (a TIFF with JPEG strips, #3645) isn't inserted.
-    let (natural_w, natural_h, ext) = match wordcraft_geom::picture::probe(&bytes) {
-        Ok(pic) => (pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(&bytes)),
-        Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => return Err(CmdError::Failed(why.into())),
-        Err(_) => match wordcraft_render::metafile_size(&bytes) {
-            Some(size) => size,
-            None => return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, TIFF, WMF, EMF)".into())),
-        },
-    };
+    match wordcraft_geom::picture::probe(bytes) {
+        Ok(pic) => Ok((pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(bytes))),
+        Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => Err(CmdError::Failed(why.into())),
+        Err(_) => wordcraft_render::metafile_size(bytes)
+            .ok_or_else(|| CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, TIFF, WMF, EMF)".into())),
+    }
+}
+
+fn place_validated_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str, natural_w: f32, natural_h: f32, ext: &str) -> CmdResult {
     let key = s.doc.add_media(bytes, ext);
     // Fitted to the text width.
     let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);

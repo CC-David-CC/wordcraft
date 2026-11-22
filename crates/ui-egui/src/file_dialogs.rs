@@ -60,6 +60,8 @@ pub(crate) enum AfterPick {
     OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
+    /// Add the chosen image behind the document's page text.
+    PictureWatermark { document: u64, scale: i64, fade: i64 },
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
@@ -211,6 +213,9 @@ impl WordApp {
                         r
                     }
                     AfterPick::Picture => self.insert_or_change_picture(json!({"data": data})),
+                    AfterPick::PictureWatermark { document, scale, fade } => {
+                        self.apply_picture_watermark(document, json!({"data": data, "scale": scale, "fade": fade}))
+                    }
                     AfterPick::Recipients => self.load_recipients(json!({"path": name, "data": data})),
                     _ => Err("this kind of pick answers with a path".into()),
                 }
@@ -272,6 +277,10 @@ impl WordApp {
                     return Ok(json!({"cancelled": true}));
                 };
                 self.insert_or_change_picture(json!({"path": path}))
+            }
+            AfterPick::PictureWatermark { document, scale, fade } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                self.apply_picture_watermark(document, json!({"path": path, "scale": scale, "fade": fade}))
             }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -530,6 +539,28 @@ impl WordApp {
     pub(crate) fn pick_picture(&mut self) {
         let req = with_open_filters(PickRequest::open("picture"), "picture");
         let _ = self.ask_file(req, AfterPick::Picture);
+    }
+
+    pub(crate) fn pick_picture_watermark(&mut self, scale: i64, fade: i64) -> Result<(), String> {
+        let req = with_open_filters(PickRequest::open("picture"), "picture");
+        let document = self.session.document_id();
+        match self.ask_file(req, AfterPick::PictureWatermark { document, scale, fade }) {
+            Asked::Busy => Err(tl!("A file dialog is already open.").into()),
+            Asked::Pending => Ok(()),
+            Asked::Done(result) => result.map(|_| ()),
+        }
+    }
+
+    fn apply_picture_watermark(&mut self, document: u64, params: Value) -> Result<Value, String> {
+        if !self.has_document() || self.session.document_id() != document {
+            return Err(tl!("The active document changed. Choose the picture again.").into());
+        }
+        let result = self.run("design.watermark", params);
+        match &result {
+            Ok(_) => self.status(tl!("Picture watermark applied.")),
+            Err(error) => self.status(error.clone()),
+        }
+        result
     }
 
     /// Pick one or more font files to add (Add Font…).

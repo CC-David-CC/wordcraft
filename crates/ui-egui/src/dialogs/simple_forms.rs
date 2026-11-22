@@ -102,17 +102,23 @@ fn settle_insert_table(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
 }
 
 fn open_watermark(app: &mut WordApp, ctx: &Context, parent: Option<DialogId>) -> DialogId {
-    let fields = DialogFields::from_pairs([("text", "CONFIDENTIAL"), ("layout", "diagonal")]);
+    let mut fields = DialogFields::from_pairs([("kind", "text"), ("text", "CONFIDENTIAL"), ("layout", "diagonal")]);
+    fields.set("scale", 50_i64);
+    fields.set("fade", 80_i64);
     let dialog = HostedParamDialog::new(ctx, "watermark", fields, |fields| {
         let layout = vec![
             ("diagonal".to_string(), Label::from(tl!("Diagonal").to_string())),
             ("horizontal".to_string(), Label::from(tl!("Horizontal").to_string())),
         ];
+        let kinds = vec![("text".to_string(), Label::from(tl!("Text"))), ("picture".to_string(), Label::from(tl!("Picture")))];
         let params = vec![
-            // The old dialog's text field was about 280 pt wide, wider than the field length: some 38 characters.
-            Param::new("text", tl!("Text").to_string(), ParamKind::text("CONFIDENTIAL")).max_chars(200).field_chars(38),
-            // The old dialog shows the two layouts side by side under the text, with no caption.
-            Param::new("layout", tl!("Layout").to_string(), ParamKind::radio(layout, Some("diagonal".into()))).options_in_row(),
+            Param::new("kind", tl!("Watermark type").to_string(), ParamKind::radio(kinds, Some("text".into()))).options_in_row(),
+            Param::new("text", tl!("Text").to_string(), ParamKind::text("CONFIDENTIAL")).max_chars(200).field_chars(38).visible_when("kind", "text"),
+            Param::new("layout", tl!("Layout").to_string(), ParamKind::radio(layout, Some("diagonal".into())))
+                .options_in_row()
+                .visible_when("kind", "text"),
+            Param::new("scale", tl!("Scale (%)").to_string(), ParamKind::int(Some(10), Some(100), 50)).visible_when("kind", "picture"),
+            Param::new("fade", tl!("Fade (%)").to_string(), ParamKind::int(Some(0), Some(95), 80)).visible_when("kind", "picture"),
         ];
         ParamDialog::command("watermark", tl!("Custom Watermark").to_string(), params).values(Bind::bound(fields)).alt_resets(false)
     });
@@ -121,6 +127,11 @@ fn open_watermark(app: &mut WordApp, ctx: &Context, parent: Option<DialogId>) ->
 
 fn settle_watermark(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
     settle_with(app, id, |app, result| {
+        if result.fields.text("kind") == Some("picture") {
+            let scale = result.fields.int("scale").unwrap_or(50);
+            let fade = result.fields.int("fade").unwrap_or(80);
+            return app.pick_picture_watermark(scale, fade);
+        }
         let text = result.fields.text("text").unwrap_or_default().to_string();
         let diagonal = result.fields.text("layout") != Some("horizontal");
         app.run("design.watermark", json!({"text": text, "diagonal": diagonal})).map(|_| ())

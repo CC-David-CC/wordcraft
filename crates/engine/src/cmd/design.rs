@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("design.scaleFontSizes", "Scale Font Sizes", "Design › Document Formatting", scale_font_sizes)
             .params(r#"{"delta": pt (-1638..1638, not 0) | "percent": number (-99..1000, not 0; 10 = +10%)} (exactly one)"#),
         CommandSpec::new("design.watermark", "Watermark", "Design › Page Background", watermark)
-            .params(r#"{"text"?: string, "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB"}"#),
+            .params(r#"{"text"?: string, "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB", "data"?: base64, "path"?: string, "scale"?: integer (10..100), "fade"?: integer (0..95)}"#),
         CommandSpec::new("design.pageColor", "Page Color", "Design › Page Background", |s, v| {
             s.doc.settings.page_color = p::str(v, "color").and_then(Rgb::parse);
             s.doc.settings.page_picture = None;
@@ -278,7 +278,13 @@ fn scale_font_sizes(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+mod watermark;
+
 fn watermark(s: &mut Session, v: &Value) -> CmdResult {
+    if !p::bool(v, "remove").unwrap_or(false) && (v.get("data").is_some() || v.get("path").is_some()) {
+        return watermark::picture(s, v);
+    }
+    watermark::clear_pictures(&mut s.doc)?;
     if p::bool(v, "remove").unwrap_or(false) {
         s.doc.settings.watermark = None;
         return sel_result(s);
