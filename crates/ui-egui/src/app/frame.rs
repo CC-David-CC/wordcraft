@@ -103,6 +103,8 @@ impl WordApp {
         let mode = self.screen_mode();
         let dropped = self.ribbon_dropped;
         let key = self.windows.window_key();
+        let compact = chrome::compact(ui);
+        self.session.view.compact_wrap = compact && !self.chrome.compact_paper;
         let shell = AppShell::new(key)
             .mode_set(ScreenModeSet::Document)
             .screen_mode(Bind::given(mode))
@@ -114,12 +116,12 @@ impl WordApp {
             // The ribbon is a tab strip over a group row: its slots are as tall as it is and stack it. A slot of the
             // default size is one options bar high and lays its content in one line, which put the groups beside the
             // tabs and collapsed every one of them.
-            .top(Slot::new("ribbonDrop").drops().size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
+            .top(Slot::new("ribbonDrop").drops().size(SlotSize::Content).visible(!compact), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
                     ribbon_slot(app, ui);
                 }
             })
-            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
+            .top(Slot::new("ribbon").size(SlotSize::Content).visible(!compact), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
                     ribbon_slot(app, ui);
                 }

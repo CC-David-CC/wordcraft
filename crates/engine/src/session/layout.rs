@@ -13,7 +13,7 @@ impl Session {
 
     /// [`Session::layout`] with `typing` as the word being typed.
     fn layout_with(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Arc<DocLayout> {
-        let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
+        let mode = if self.view.read_mode { ViewMode::Read } else { self.view.editing_mode() };
         let width = match mode {
             ViewMode::Read => self.view.read_width,
             ViewMode::Web => self.view.web_width,

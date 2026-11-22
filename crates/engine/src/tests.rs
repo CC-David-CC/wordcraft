@@ -12693,6 +12693,21 @@ fn vertical_align_command_sets_justified() {
     }
 }
 
+#[test]
+fn compact_wrapping_preserves_the_paper_page_on_export_and_resize() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A narrow editing window. ".repeat(40)}));
+    let paper_width = s.layout().pages[0].w;
+    let saved = serde_json::to_value(&s.view).unwrap();
+    s.view.compact_wrap = true;
+    s.view.web_width = paper_width / 2.0;
+    assert!(s.layout().pages[0].w < paper_width);
+    assert_eq!(s.export_layout().pages[0].w, paper_width);
+    assert_eq!(serde_json::to_value(&s.view).unwrap(), saved);
+    s.view.compact_wrap = false;
+    assert_eq!(s.layout().pages[0].w, paper_width);
+}
+
 /// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
 /// 800 pt column, also after a visit to a wide Web Layout, and the window width is never serialized.
 #[test]

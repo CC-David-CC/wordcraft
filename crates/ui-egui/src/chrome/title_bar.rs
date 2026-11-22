@@ -28,6 +28,30 @@ use crate::WordApp;
 
 /// Fills the shell's title slot: the title bar, and what its title and Close report.
 pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
+    if super::compact(ui) && app.has_document() {
+        ui.horizontal_wrapped(|ui| {
+            Button::command(CommandRef::new("ui.backstage")).label(tl!("File").to_string()).show(ui);
+            Button::command(CommandRef::new("file.save")).label(tl!("Save").to_string()).show(ui);
+            let more = Button::new(tl!("Tools").to_string()).show(ui);
+            Menu::new(tl!("Tools").to_string()).opened_by(&more.response, Trigger::Click).show(ui, |ui, _| {
+                for (id, label) in [
+                    ("edit.undo", tl!("Undo")),
+                    ("edit.redo", tl!("Redo")),
+                    ("format.bold", tl!("Bold")),
+                    ("format.italic", tl!("Italic")),
+                    ("format.underline", tl!("Underline")),
+                    ("edit.find", tl!("Find")),
+                ] {
+                    MenuItem::command(CommandRef::new(id)).label(label.to_string()).show(ui);
+                }
+                let label = if app.chrome.compact_paper { tl!("Wrap text to window") } else { tl!("Show print layout") };
+                if MenuItem::new(label.to_string()).show(ui).ran {
+                    app.chrome.compact_paper = !app.chrome.compact_paper;
+                }
+            });
+        });
+        return;
+    }
     let title = if app.has_document() {
         let state = if app.session.dirty {
             tl!("Edited")

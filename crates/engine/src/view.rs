@@ -56,6 +56,9 @@ pub struct ViewState {
     /// Draft and Outline don't use it: they keep a fixed 800 pt column.
     #[serde(skip, default = "default_web_width")]
     pub web_width: f32,
+    /// Reflow a print document for narrow-window editing without changing its saved view.
+    #[serde(skip)]
+    pub compact_wrap: bool,
     /// Transient viewport metrics for reading pagination; never saved in a document or preferences.
     #[serde(skip, default = "default_read_width")]
     pub read_width: f32,
@@ -162,6 +165,11 @@ fn default_read_zoom() -> f32 {
 }
 
 impl ViewState {
+    /// The editor's layout mode. Export and print always use the paper layout.
+    pub fn editing_mode(&self) -> ViewMode {
+        if self.compact_wrap && self.mode == ViewMode::Print { ViewMode::Web } else { self.mode }
+    }
+
     /// Take the app-wide settings a view keeps a copy of from the saved preferences: Read Mode's
     /// page colour and Check spelling as you type (#5740). A view made active goes through this
     /// (a document switched to, opened or made, a window's view put back), so a change made while
@@ -198,6 +206,7 @@ impl Default for ViewState {
             single_column: false,
             fit: String::new(),
             web_width: default_web_width(),
+            compact_wrap: false,
             read_width: default_read_width(),
             read_height: default_read_height(),
             read_column_width: None,

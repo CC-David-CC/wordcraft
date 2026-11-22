@@ -466,7 +466,7 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
             app.canvas.scroll_to_caret |= reflow_anchor.is_none();
         }
     } else {
-        if app.session.view.mode == wordcraft_layout::ViewMode::Web {
+        if app.session.view.editing_mode() == wordcraft_layout::ViewMode::Web {
             // Web Layout wraps to the work area (#1876).
             let scale = app.session.view.zoom.clamp(0.1, 5.0) * PX_PER_PT;
             // The page view keeps its side gutter (the rail width) clear on both sides of a page, so the page
@@ -617,7 +617,7 @@ fn navigation_options() -> NavigationOptions {
 /// The session's view settings as the page view's state for this pass.
 fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
     let v = &app.session.view;
-    let web = v.mode != wordcraft_layout::ViewMode::Print;
+    let web = v.editing_mode() != wordcraft_layout::ViewMode::Print;
     let editing_part = matches!(app.session.sel.focus.story, StoryRef::Part(_));
     state.continuous = true;
     state.cover = false;
@@ -777,7 +777,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let areas = mark_areas(app, layout, &selected);
     let bodies: Vec<(f64, f64)> = layout.pages.iter().map(|p| (f64::from(p.body.y), f64::from(p.body.bottom()))).collect();
     let show_rulers = app.session.view.ruler
-        && app.session.view.mode == wordcraft_layout::ViewMode::Print
+        && app.session.view.editing_mode() == wordcraft_layout::ViewMode::Print
         && crate::chrome::Screen::of(&app.session.view) == crate::chrome::Screen::Normal;
     let options =
         LayoutOptions { markup: f64::from(markup_width(app)), min_columns: if app.session.view.multi_page { 2 } else { 1 }, ..LayoutOptions::WORD };

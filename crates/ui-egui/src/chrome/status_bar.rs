@@ -28,6 +28,17 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     if !app.has_document() {
         return;
     }
+    if super::compact(ui) {
+        Bar::new(tl!("Status Bar").to_string(), BarKind::Status).show(ui, |ui, _| {
+            if let Some(message) = app.status_message() {
+                let text = message.text.clone();
+                message.tooltip(text).show(ui);
+            } else {
+                count(app, ui);
+            }
+        });
+        return;
+    }
     // The controls give way in a narrow window (#5886): the step that fits the room the page left them in the last
     // pass.
     let step = app.chrome.status_fit.step();
