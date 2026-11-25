@@ -15,6 +15,7 @@ use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
 use craft::ui::shell::embed;
 use craft::window::system::NoWindows;
+use serde_json::{Value, json};
 use wasm_bindgen::JsCast as _;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::prefs::Prefs;
@@ -67,11 +68,12 @@ pub fn start() {
                         .with_wake(waker(&ctx));
                     let late_offers = event_clipboard.late_offers();
                     let document_paste_target = Rc::new(Cell::new(false));
-                    if let Err(e) = listen_for_paste(late_offers, document_paste_target.clone()) {
+                    let pending_clipboard = Rc::new(RefCell::new(Vec::new()));
+                    if let Err(e) = listen_for_paste(late_offers, document_paste_target.clone(), pending_clipboard.clone(), ctx.clone()) {
                         log::error!("browser clipboard paste is unavailable: {e}");
                     }
-                    if let Err(e) = keep_document_formatting_keys(document_paste_target.clone()) {
-                        log::error!("browser formatting shortcut guard is unavailable: {e}");
+                    if let Err(e) = route_document_keys(document_paste_target.clone()) {
+                        log::error!("browser shortcut routing is unavailable: {e}");
                     }
 
                     // The browser's locale picks the new document's paper, the units and the
@@ -154,7 +156,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &name);
                         author = crate::prefs::HostAuthor::new(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, sender, messages, settings, author, document_paste_target }))
+                    Ok(Box::new(WebShell { app, sender, messages, settings, author, document_paste_target, pending_clipboard }))
                 }),
             )
             .await;
@@ -205,6 +207,7 @@ struct WebShell {
     /// Set when a host page named the user: its name is not kept in the stored preferences.
     author: Option<crate::prefs::HostAuthor>,
     document_paste_target: Rc<Cell<bool>>,
+    pending_clipboard: Rc<RefCell<Vec<Value>>>,
 }
 
 impl eframe::App for WebShell {
@@ -215,6 +218,9 @@ impl eframe::App for WebShell {
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
             self.app.status(msg);
+        }
+        for paste in std::mem::take(&mut *self.pending_clipboard.borrow_mut()) {
+            self.app.paste_browser_text(ctx, paste);
         }
         self.app.logic(ctx);
         if let Some(author) = &self.author {
@@ -256,13 +262,21 @@ const MAX_PASTED_BYTES: f64 = (200u32 << 20) as f64;
 /// Most pictures one paste inserts.
 const MAX_PASTED_PICTURES: u32 = 20;
 
-/// Give Ctrl/Command with Equals or Plus to WordCraft's formatting commands while editing.
-/// eframe still receives the key, and the browser can handle it outside the document.
-fn keep_document_formatting_keys(document_editing: Rc<Cell<bool>>) -> Result<(), String> {
+/// Keep browser zoom out of document formatting while leaving browser shortcuts available elsewhere.
+fn route_document_keys(document_editing: Rc<Cell<bool>>) -> Result<(), String> {
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
     let keydown = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
-        if document_editing.get() && (event.ctrl_key() || event.meta_key()) && !event.alt_key() && matches!(event.key().as_str(), "=" | "+") {
+        if !document_editing.get() || event.alt_key() {
+            return;
+        }
+        let key = event.key();
+        let command = event.ctrl_key() || event.meta_key();
+        if command && matches!(key.as_str(), "=" | "+") {
             event.prevent_default();
+        } else if (command && !event.shift_key() && key.eq_ignore_ascii_case("v")) || (!command && event.shift_key() && key == "Insert") {
+            // The browser's native paste event supplies the payload. The key press itself must
+            // never dispatch an additional WordCraft paste.
+            event.stop_immediate_propagation();
         }
     });
     document.add_event_listener_with_callback_and_bool("keydown", keydown.as_ref().unchecked_ref(), true).map_err(|e| format!("{e:?}"))?;
@@ -270,9 +284,14 @@ fn keep_document_formatting_keys(document_editing: Rc<Cell<bool>>) -> Result<(),
     Ok(())
 }
 
-/// The document paste command reads the host clipboard offer. eframe's event carries plain text
-/// to its own fields but doesn't populate that offer or carry the HTML and RTF.
-fn listen_for_paste(late: LateOffers, document_paste_target: Rc<Cell<bool>>) -> Result<(), String> {
+/// Move browser text and markup into the document command queue without also giving the same
+/// paste to eframe. Other fields still use eframe's ordinary paste event.
+fn listen_for_paste(
+    late: LateOffers,
+    document_paste_target: Rc<Cell<bool>>,
+    pending_clipboard: Rc<RefCell<Vec<Value>>>,
+    ctx: egui::Context,
+) -> Result<(), String> {
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
     let late = Rc::new(late);
     let on_paste = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
@@ -281,17 +300,23 @@ fn listen_for_paste(late: LateOffers, document_paste_target: Rc<Cell<bool>>) -> 
             // eframe handles paste into a focused dialog or other text input.
             return;
         }
-        let flavors: Vec<_> = [TEXT, HTML, RTF]
+        let mut fields: serde_json::Map<_, _> = [(TEXT, "text"), (HTML, "html"), (RTF, "rtf")]
             .into_iter()
-            .filter_map(|mime| {
+            .filter_map(|(mime, field)| {
                 let value = data.get_data(mime).ok()?;
-                (!value.is_empty() && value.len() <= wordcraft_engine::cmd::paste::MAX_PASTE_BYTES).then(|| Flavor::new(mime, value.into_bytes()))
+                (!value.is_empty() && value.len() <= wordcraft_engine::cmd::paste::MAX_PASTE_BYTES)
+                    .then(|| (String::from(field), Value::String(value)))
             })
             .collect();
-        if !flavors.is_empty() {
+        if !fields.is_empty() {
             e.prevent_default();
             e.stop_immediate_propagation();
-            late.offer(flavors);
+            fields.insert("privateClipboard".into(), json!(false));
+            let mut pending = pending_clipboard.borrow_mut();
+            if pending.len() < 4 {
+                pending.push(Value::Object(fields));
+                ctx.request_repaint();
+            }
             return;
         }
         let Some(files) = data.files() else { return };

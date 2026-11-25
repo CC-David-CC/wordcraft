@@ -75,6 +75,21 @@ impl WordApp {
         !self.keytips_active && !self.session.view.read_mode && paste_target(self.canvas.focused(ctx), self.ui.backstage, self.modal_open())
     }
 
+    /// Apply the browser's one-shot text and markup paste to the focused document.
+    #[cfg(target_arch = "wasm32")]
+    pub fn paste_browser_text(&mut self, ctx: &egui::Context, content: Value) {
+        if !self.document_is_paste_target(ctx) {
+            return;
+        }
+        if self.session.math.is_some() {
+            if let Some(text) = content.get("text").and_then(Value::as_str) {
+                let _ = self.run("equation.type", json!({"text": text}));
+            }
+        } else {
+            let _ = self.run("edit.paste", content);
+        }
+    }
+
     /// A paste the host delivered as an event (the browser's): run Paste once when the page is the
     /// edit target, otherwise leave it so the focused field's own paste applies (a text field
     /// ignores a picture). `arrived` holds in every pass of the frame, so this runs once per
@@ -91,7 +106,7 @@ impl WordApp {
             }
             // The installed clipboard exposes the same offer to every logic pass of its frame.
             // A document paste consumes it once, even when eframe revisits that frame.
-            let id = egui::Id::new("wordcraft-pasted-frame");
+            let id = egui::Id::unique("wordcraft-pasted-frame");
             let frame = ctx.cumulative_frame_nr();
             if !ctx.data_mut(|data| {
                 if data.get_temp::<u64>(id) == Some(frame) {
@@ -105,14 +120,6 @@ impl WordApp {
         }
         // PLAN(canvas-w9): cv.A10 `CanvasState::focused(&self, &egui::Context) -> bool`
         if paste_target(self.canvas.focused(ctx), self.ui.backstage, self.modal_open()) {
-            #[cfg(target_arch = "wasm32")]
-            if self.session.math.is_some() {
-                // Clipboard text enters the active equation the same way as a native paste.
-                if let Ok(Some(text)) = clipboard.read_text() {
-                    let _ = self.run("equation.type", json!({"text": text}));
-                }
-                return;
-            }
             let _ = self.run("edit.paste", json!({}));
         } else {
             log::debug!("pasted content ignored: the document is not the edit target");
