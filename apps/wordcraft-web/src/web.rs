@@ -269,7 +269,7 @@ const MAX_PASTED_BYTES: f64 = (200u32 << 20) as f64;
 /// Most pictures one paste inserts.
 const MAX_PASTED_PICTURES: u32 = 20;
 
-/// Keep browser zoom out of document formatting while leaving browser shortcuts available elsewhere.
+/// Keep browser Find and zoom from taking focus during document commands.
 fn route_document_keys(document_editing: Rc<Cell<bool>>) -> Result<(), String> {
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
     let keydown = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
@@ -278,7 +278,8 @@ fn route_document_keys(document_editing: Rc<Cell<bool>>) -> Result<(), String> {
         }
         let key = event.key();
         let command = event.ctrl_key() || event.meta_key();
-        if command && matches!(key.as_str(), "=" | "+") {
+        let document_find = !event.shift_key() && key.eq_ignore_ascii_case("f");
+        if command && (matches!(key.as_str(), "=" | "+") || document_find) {
             event.prevent_default();
         } else if (command && !event.shift_key() && key.eq_ignore_ascii_case("v")) || (!command && event.shift_key() && key == "Insert") {
             // The browser's native paste event supplies the payload. The key press itself must
