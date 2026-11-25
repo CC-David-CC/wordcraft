@@ -26,6 +26,25 @@ impl WordApp {
         ui
     }
 
+    /// Uses the host's display name for comments and tracked changes in this session.
+    pub fn set_host_author(&mut self, name: String) {
+        if name != self.session.author {
+            let preference = std::mem::replace(&mut self.session.author, name.clone());
+            self.host_author = Some(crate::HostAuthor { name, preference });
+        }
+    }
+
+    /// Save the personal preference while the session is still using the host's name.
+    fn prefs_for_storage(&self) -> Prefs {
+        let mut prefs = self.prefs();
+        if let Some(host) = &self.host_author
+            && prefs.author.as_deref() == Some(host.name.as_str())
+        {
+            prefs.author = Some(host.preference.clone());
+        }
+        prefs
+    }
+
     /// Restore preferences saved by [`WordApp::prefs`].
     pub fn apply_prefs(&mut self, ui: Prefs) {
         self.ui = ui;
@@ -109,7 +128,7 @@ impl WordApp {
     /// A frame's second pass finds the store unchanged and does nothing more.
     pub(crate) fn save_prefs_step(&mut self, ctx: &egui::Context) {
         let Some(settings) = self.settings.clone() else { return };
-        let current = self.prefs();
+        let current = self.prefs_for_storage();
         let result = {
             let mut store = settings.lock();
             store.set(current);
@@ -130,7 +149,7 @@ impl WordApp {
     /// save failed, and the status line says so.
     pub(crate) fn flush_prefs(&mut self) -> Option<Result<(), String>> {
         let settings = self.settings.clone()?;
-        let current = self.prefs();
+        let current = self.prefs_for_storage();
         let mut store = settings.lock();
         store.set(current);
         match store.flush() {

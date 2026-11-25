@@ -95,6 +95,7 @@ impl WordApp {
             services,
             host: std::sync::Arc::new(craft::host::Host::builder(super::APP).i18n(i18n::catalogs()).lang(craft::i18n::Lang::EN).build()),
             settings: None,
+            host_author: None,
             settings_notices: Default::default(),
             command_catalog: None,
             command_catalog_mac: cfg!(target_os = "macos"),

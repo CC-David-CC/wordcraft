@@ -378,6 +378,12 @@ pub(crate) fn migrate_units(v: &mut Value) {
     }
 }
 
+/// The name supplied by the host for this session, and the personal preference it replaced.
+struct HostAuthor {
+    name: String,
+    preference: String,
+}
+
 /// The application.
 pub struct WordApp {
     pub session: Session,
@@ -387,6 +393,7 @@ pub struct WordApp {
     pub(crate) host: std::sync::Arc<craft::host::Host>,
     /// The saved preferences' store, shared with the host.
     pub(crate) settings: Option<craft::settings::SharedSettings<prefs::Prefs>>,
+    host_author: Option<HostAuthor>,
     /// What the settings store reported at load and at each save, for the status line and the notices.
     pub(crate) settings_notices: craft::ui::notices::SettingsNoticeState,
     /// The app's commands as the keymap knows them, and the registry they were built from

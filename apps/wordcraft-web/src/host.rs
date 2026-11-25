@@ -134,7 +134,7 @@ impl Bridge {
     pub fn set_author(app: &mut WordApp, author: &str) {
         let author: String = author.trim().chars().take(MAX_AUTHOR_CHARS).collect();
         if !author.is_empty() {
-            app.session.author = author;
+            app.set_host_author(author);
         }
     }
 

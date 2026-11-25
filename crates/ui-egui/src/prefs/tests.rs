@@ -131,6 +131,25 @@ fn a_blank_user_name_survives_a_restart() {
     assert_eq!(third.session.author, default);
 }
 
+/// The host name signs this session. Persistence keeps the user's own setting and later edits.
+#[test]
+fn host_author_is_saved_only_as_the_personal_preference() {
+    let dir = store_dir("host-author");
+    let settings = open(&dir);
+    settings.lock().update(|p| p.author = Some("Personal Author".into()));
+    let mut a = app().with_settings(settings);
+    a.set_host_author("Site Display Name".into());
+    assert_eq!(a.session.author, "Site Display Name");
+    assert_eq!(a.prefs().author.as_deref(), Some("Site Display Name"));
+    assert_eq!(a.flush_prefs(), Some(Ok(())));
+    assert_eq!(open(&dir).lock().get().author.as_deref(), Some("Personal Author"));
+
+    a.session.author = "Edited Author".into();
+    assert_eq!(a.flush_prefs(), Some(Ok(())));
+    assert_eq!(open(&dir).lock().get().author.as_deref(), Some("Edited Author"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// #2068: the recent fonts keep their limits on push and on load.
 #[test]
 fn recently_used_fonts_refuse_overlong_names_and_huge_lists() {

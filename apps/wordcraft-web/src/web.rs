@@ -11,14 +11,12 @@ use craft::platform::appearance::SystemReader;
 use craft::platform::browser_files::BrowserFiles;
 use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, HTML, LateOffers, RTF, TEXT};
 use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
-use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
 use craft::ui::shell::embed;
 use craft::window::system::NoWindows;
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast as _;
 use wordcraft_engine::Session;
-use wordcraft_ui_egui::prefs::Prefs;
 use wordcraft_ui_egui::{Services, WordApp};
 
 mod font_store;
@@ -133,7 +131,7 @@ pub fn start() {
                     }
                     let requests = crate::api::install(ctx.clone());
                     let mut app =
-                        WordApp::new(session, services).with_host(host).with_settings(settings.clone()).with_control(ControlChannel::new(requests));
+                        WordApp::new(session, services).with_host(host).with_settings(settings).with_control(ControlChannel::new(requests));
                     app.autosave = false;
                     app.tell_about_font_downloads();
                     // A region chosen in File › Options replaces the browser's for the first blank
@@ -146,17 +144,12 @@ pub fn start() {
                     if !sample {
                         app.start_screen();
                     }
-                    // The host's name for the user signs this visit's work, but isn't stored as the
-                    // browser's own preference, which a visit outside the host would restore.
-                    let mut author = None;
                     if app_bridge.is_some()
                         && let Some(name) = query_param("author")
                     {
-                        let own = app.session.author.clone();
                         crate::host::Bridge::set_author(&mut app, &name);
-                        author = crate::prefs::HostAuthor::new(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, sender, messages, settings, author, document_paste_target, pending_clipboard }))
+                    Ok(Box::new(WebShell { app, sender, messages, document_paste_target, pending_clipboard }))
                 }),
             )
             .await;
@@ -203,17 +196,12 @@ struct WebShell {
     app: WordApp,
     sender: IntakeSender,
     messages: Rc<RefCell<Vec<String>>>,
-    settings: SharedSettings<Prefs>,
-    /// Set when a host page named the user: its name is not kept in the stored preferences.
-    author: Option<crate::prefs::HostAuthor>,
     document_paste_target: Rc<Cell<bool>>,
     pending_clipboard: Rc<RefCell<Vec<Value>>>,
 }
 
 impl eframe::App for WebShell {
-    /// Runs one browser frame: forwards queued host messages to the status bar, advances the app,
-    /// then ticks the settings store, which writes changed preferences to browser storage at once
-    /// (a reload or closed tab never runs an exit path). The browser has no window-close path.
+    /// Forwards queued host messages and clipboard events before advancing the app.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
@@ -224,10 +212,6 @@ impl eframe::App for WebShell {
         }
         self.app.poll_browser_paste();
         self.app.logic(ctx);
-        if let Some(author) = &self.author {
-            author.keep_own_author(&self.settings);
-        }
-        self.settings.lock().tick(web_time::Instant::now());
     }
 
     /// Takes the browser's dropped files once per frame, before any pass, and spawns asynchronous
