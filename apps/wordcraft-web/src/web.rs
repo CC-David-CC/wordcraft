@@ -9,7 +9,7 @@ use craft::automation::control::ControlChannel;
 use craft::host::{Files, Host, Wake};
 use craft::platform::appearance::SystemReader;
 use craft::platform::browser_files::BrowserFiles;
-use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, LateOffers, TEXT};
+use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, HTML, LateOffers, RTF, TEXT};
 use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
 use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
@@ -66,8 +66,12 @@ pub fn start() {
                     let event_clipboard = EventClipboard::new(move || frame_ctx.cumulative_frame_nr(), move |flavors| copy_out(&copy_ctx, flavors))
                         .with_wake(waker(&ctx));
                     let late_offers = event_clipboard.late_offers();
-                    if let Err(e) = listen_for_pasted_pictures(late_offers) {
-                        log::error!("pasting pictures is unavailable: {e}");
+                    let document_paste_target = Rc::new(Cell::new(false));
+                    if let Err(e) = listen_for_paste(late_offers, document_paste_target.clone()) {
+                        log::error!("browser clipboard paste is unavailable: {e}");
+                    }
+                    if let Err(e) = keep_document_formatting_keys(document_paste_target.clone()) {
+                        log::error!("browser formatting shortcut guard is unavailable: {e}");
                     }
 
                     // The browser's locale picks the new document's paper, the units and the
@@ -150,7 +154,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &name);
                         author = crate::prefs::HostAuthor::new(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, sender, messages, settings, author }))
+                    Ok(Box::new(WebShell { app, sender, messages, settings, author, document_paste_target }))
                 }),
             )
             .await;
@@ -200,6 +204,7 @@ struct WebShell {
     settings: SharedSettings<Prefs>,
     /// Set when a host page named the user: its name is not kept in the stored preferences.
     author: Option<crate::prefs::HostAuthor>,
+    document_paste_target: Rc<Cell<bool>>,
 }
 
 impl eframe::App for WebShell {
@@ -242,6 +247,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // No `embed::before_ui`: it fits and routes a native window, and the page's canvas is neither.
         self.app.ui(ui);
+        self.document_paste_target.set(self.app.document_is_paste_target(ui.ctx()));
     }
 }
 
@@ -250,17 +256,42 @@ const MAX_PASTED_BYTES: f64 = (200u32 << 20) as f64;
 /// Most pictures one paste inserts.
 const MAX_PASTED_PICTURES: u32 = 20;
 
-/// Pasting a picture (#45): eframe's paste handler only reads text, so a clipboard holding just
-/// pictures (a screenshot, a browser's Copy Image) is read here and offered to the clipboard as a
-/// late paste; the app inserts it only when the page is the edit target (#1349). A clipboard with
-/// text is left to eframe.
-fn listen_for_pasted_pictures(late: LateOffers) -> Result<(), String> {
+/// Give Ctrl/Command with Equals or Plus to WordCraft's formatting commands while editing.
+/// eframe still receives the key, and the browser can handle it outside the document.
+fn keep_document_formatting_keys(document_editing: Rc<Cell<bool>>) -> Result<(), String> {
+    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let keydown = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
+        if document_editing.get() && (event.ctrl_key() || event.meta_key()) && !event.alt_key() && matches!(event.key().as_str(), "=" | "+") {
+            event.prevent_default();
+        }
+    });
+    document.add_event_listener_with_callback_and_bool("keydown", keydown.as_ref().unchecked_ref(), true).map_err(|e| format!("{e:?}"))?;
+    keydown.forget();
+    Ok(())
+}
+
+/// The document paste command reads the host clipboard offer. eframe's event carries plain text
+/// to its own fields but doesn't populate that offer or carry the HTML and RTF.
+fn listen_for_paste(late: LateOffers, document_paste_target: Rc<Cell<bool>>) -> Result<(), String> {
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
     let late = Rc::new(late);
     let on_paste = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
-        // The target is always eframe's hidden text input while the page has focus; the app decides (#1349).
         let Some(data) = e.clipboard_data() else { return };
-        if !data.get_data("text").unwrap_or_default().is_empty() {
+        if !document_paste_target.get() {
+            // eframe handles paste into a focused dialog or other text input.
+            return;
+        }
+        let flavors: Vec<_> = [TEXT, HTML, RTF]
+            .into_iter()
+            .filter_map(|mime| {
+                let value = data.get_data(mime).ok()?;
+                (!value.is_empty() && value.len() <= wordcraft_engine::cmd::paste::MAX_PASTE_BYTES).then(|| Flavor::new(mime, value.into_bytes()))
+            })
+            .collect();
+        if !flavors.is_empty() {
+            e.prevent_default();
+            e.stop_immediate_propagation();
+            late.offer(flavors);
             return;
         }
         let Some(files) = data.files() else { return };
@@ -286,7 +317,7 @@ fn listen_for_pasted_pictures(late: LateOffers) -> Result<(), String> {
             });
         }
     });
-    document.add_event_listener_with_callback("paste", on_paste.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+    document.add_event_listener_with_callback_and_bool("paste", on_paste.as_ref().unchecked_ref(), true).map_err(|e| format!("{e:?}"))?;
     // The listener lives as long as the page.
     on_paste.forget();
     Ok(())

@@ -69,6 +69,12 @@ impl WordApp {
         }
     }
 
+    /// Whether a browser clipboard event should be given to the document instead of a native field.
+    #[cfg(target_arch = "wasm32")]
+    pub fn document_is_paste_target(&self, ctx: &egui::Context) -> bool {
+        paste_target(self.canvas.focused(ctx), self.ui.backstage, self.modal_open())
+    }
+
     /// A paste the host delivered as an event (the browser's): run Paste once when the page is the
     /// edit target, otherwise leave it so the focused field's own paste applies (a text field
     /// ignores a picture). `arrived` holds in every pass of the frame, so this runs once per
@@ -79,6 +85,14 @@ impl WordApp {
         }
         // PLAN(canvas-w9): cv.A10 `CanvasState::focused(&self, &egui::Context) -> bool`
         if paste_target(self.canvas.focused(ctx), self.ui.backstage, self.modal_open()) {
+            #[cfg(target_arch = "wasm32")]
+            if self.session.math.is_some() {
+                // Clipboard text enters the active equation the same way as a native paste.
+                if let Ok(Some(text)) = ClipboardHandle::of(ctx).read_text() {
+                    let _ = self.run("equation.type", json!({"text": text}));
+                }
+                return;
+            }
             let _ = self.run("edit.paste", json!({}));
         } else {
             log::debug!("pasted content ignored: the document is not the edit target");
