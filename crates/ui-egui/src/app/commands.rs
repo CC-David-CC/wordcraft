@@ -81,7 +81,7 @@ impl WordApp {
         // doesn't carry (#687).
         #[cfg(target_arch = "wasm32")]
         if params.as_object().is_some_and(|fields| fields.is_empty())
-            && matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge")
+            && system_clipboard::is_paste(id)
             && command_enabled(self, id)
             && !system_clipboard::handle(self).is_some_and(|clipboard| clipboard.arrived())
             && system_clipboard::request_browser_paste(self, id)
