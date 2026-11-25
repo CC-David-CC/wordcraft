@@ -184,7 +184,10 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     };
     let ink = |app: &mut WordApp| caret_color_at(app, &doc, pl.page, pl.probe.0, pl.probe.1, zoom_key, dim_body);
 
-    let shown = pl.collapsed && focused;
+    // The hosted editor retains its logical focus while the desktop owns the keyboard.
+    // Leave the caret idle until the browser gives focus back to this window.
+    let caret_focused = focused && (app.services.host_document.is_none() || ctx.input(|input| input.focused));
+    let shown = pl.collapsed && caret_focused;
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
     let mut composition = None;
     if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() {
@@ -211,7 +214,7 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
             ctx.request_repaint();
         } else if shown && blink_fading(since_ms / 1000.0, app.canvas.glide.secs()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        } else if focused {
+        } else if caret_focused {
             ctx.request_repaint_after(std::time::Duration::from_millis(530 - (since_ms as u64 % 530)));
         }
     }

@@ -2,6 +2,7 @@
 //! file (theme, interface size, recent symbols, editing options…), kept by the settings store in the
 //! browser's `localStorage`. A value stored by an earlier build under `wordcraft.ui` is imported once.
 
+#[cfg(target_arch = "wasm32")]
 use craft::settings::SharedSettings;
 use wordcraft_ui_egui::prefs::Prefs;
 
