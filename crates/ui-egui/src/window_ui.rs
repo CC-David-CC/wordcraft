@@ -140,6 +140,7 @@ impl WordApp {
             services: _,
             host: _,
             settings: _,
+            host_author: _,
             settings_notices: _,
             command_catalog: _,
             command_catalog_mac: _,
