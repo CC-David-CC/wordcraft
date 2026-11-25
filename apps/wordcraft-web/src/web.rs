@@ -253,6 +253,12 @@ impl eframe::App for WebShell {
     /// Draws the app.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // No `embed::before_ui`: it fits and routes a native window, and the page's canvas is neither.
+        // A minimized WebOS iframe has a zero-size viewport. Its layout cannot
+        // place the caret, but logic must keep servicing pending host requests.
+        if !ui.ctx().input(|input| input.viewport_rect().is_positive()) {
+            self.document_paste_target.set(false);
+            return;
+        }
         self.app.ui(ui);
         self.document_paste_target.set(self.app.document_is_paste_target(ui.ctx()));
     }
