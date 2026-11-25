@@ -2,6 +2,9 @@
 /// reach the app through the framework's host, not through here.
 #[derive(Default)]
 pub struct Services {
+    /// Web: ask the browser for fresh clipboard contents after a Paste command.
+    #[cfg(target_arch = "wasm32")]
+    pub read_browser_clipboard: Option<BrowserClipboardReader>,
     /// Desktop printer jobs through the host.
     pub print: Option<craft::print::spool::Spool>,
     /// Browser print submission with the result of the PDF frame's load and print call.
@@ -38,6 +41,9 @@ pub struct Services {
     /// Files the system asked the app to open, and files dropped on a window, read once per frame.
     pub intake: Option<craft::platform::open::FileIntake>,
 }
+
+#[cfg(target_arch = "wasm32")]
+pub type BrowserClipboardReader = Box<dyn Fn(bool) -> std::sync::mpsc::Receiver<Result<serde_json::Value, String>>>;
 
 pub struct HostSaveContext {
     /// Exact live document that produced these bytes, captured before host dispatch.

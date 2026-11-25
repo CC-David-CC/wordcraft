@@ -27,6 +27,62 @@ pub(crate) fn is_paste(id: &str) -> bool {
     matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteSpecial")
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct PendingBrowserPaste {
+    command: String,
+    document: u64,
+    revision: u64,
+    selection: wordcraft_engine::Selection,
+    result: std::sync::mpsc::Receiver<Result<Value, String>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn request_browser_paste(app: &mut WordApp, id: &str) -> bool {
+    let Some(read) = &app.services.read_browser_clipboard else { return false };
+    if app.pending_browser_paste.is_none() {
+        app.pending_browser_paste = Some(PendingBrowserPaste {
+            command: id.into(),
+            document: app.session.document_id(),
+            revision: app.session.rev(),
+            selection: app.session.sel.clone(),
+            result: read(id == "edit.pasteText"),
+        });
+    }
+    true
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WordApp {
+    /// Complete a menu-initiated clipboard read only while its original edit target is valid.
+    pub fn poll_browser_paste(&mut self) {
+        let Some(pending) = self.pending_browser_paste.as_ref() else { return };
+        let result = match pending.result.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Clipboard access is unavailable. Use Ctrl+V or Command+V to paste.".into()),
+        };
+        let pending = self.pending_browser_paste.take().unwrap();
+        if self.session.document_id() != pending.document
+            || self.session.rev() != pending.revision
+            || self.session.sel != pending.selection
+            || self.ui.backstage
+            || self.modal_open()
+            || self.session.view.read_mode
+        {
+            self.status("Paste cancelled because the document or selection changed.");
+            return;
+        }
+        match result {
+            Ok(content) => {
+                if let Err(error) = self.run(&pending.command, content) {
+                    self.status(error);
+                }
+            }
+            Err(message) => self.status(message),
+        }
+    }
+}
+
 /// Most format names an error lists.
 const MAX_NAMES: usize = 6;
 /// Longest format name shown.

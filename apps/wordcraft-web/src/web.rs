@@ -222,6 +222,7 @@ impl eframe::App for WebShell {
         for paste in std::mem::take(&mut *self.pending_clipboard.borrow_mut()) {
             self.app.paste_browser_text(ctx, paste);
         }
+        self.app.poll_browser_paste();
         self.app.logic(ctx);
         if let Some(author) = &self.author {
             author.keep_own_author(&self.settings);
@@ -348,12 +349,70 @@ fn listen_for_paste(
     Ok(())
 }
 
+/// Read only the supported text formats and cap bytes before copying clipboard data into Wasm.
+async fn read_browser_clipboard(text_only: bool) -> Result<Value, String> {
+    use wasm_bindgen_futures::JsFuture;
+    use wordcraft_engine::cmd::paste::MAX_PASTE_BYTES;
+
+    let unavailable = || "Clipboard access is unavailable. Use Ctrl+V or Command+V to paste.".to_string();
+    let empty = || "The clipboard has no supported text. Use Ctrl+V or Command+V to paste other supported content.".to_string();
+    let clipboard = web_sys::window().ok_or_else(unavailable)?.navigator().clipboard();
+    let has_method = |method: &str| js_sys::Reflect::get(&clipboard, &method.into()).is_ok_and(|value| value.is_function());
+    if text_only || !has_method("read") {
+        if !has_method("readText") {
+            return Err(unavailable());
+        }
+        let text = JsFuture::from(clipboard.read_text()).await.map_err(|_| unavailable())?.as_string().ok_or_else(empty)?;
+        if text.len() > MAX_PASTE_BYTES {
+            return Err("Clipboard text is too large to paste.".into());
+        }
+        return if text.is_empty() { Err(empty()) } else { Ok(json!({"text": text, "privateClipboard": false})) };
+    }
+
+    let items: js_sys::Array = JsFuture::from(clipboard.read()).await.map_err(|_| unavailable())?.unchecked_into();
+    let mut oversized = false;
+    for item in items.iter().take(4) {
+        let item: web_sys::ClipboardItem = item.unchecked_into();
+        let types = item.types();
+        let mut fields = serde_json::Map::new();
+        for (mime, field) in [(TEXT, "text"), (HTML, "html"), (RTF, "rtf")] {
+            if !types.includes(&mime.into(), 0) {
+                continue;
+            }
+            let Ok(data) = JsFuture::from(item.get_type(mime)).await else { continue };
+            let blob: web_sys::Blob = data.unchecked_into();
+            if blob.size() > MAX_PASTE_BYTES as f64 {
+                oversized = true;
+                continue;
+            }
+            if let Some(text) = JsFuture::from(blob.text()).await.ok().and_then(|value| value.as_string()).filter(|text| !text.is_empty()) {
+                fields.insert(field.into(), Value::String(text));
+            }
+        }
+        if !fields.is_empty() {
+            fields.insert("privateClipboard".into(), Value::Bool(false));
+            return Ok(Value::Object(fields));
+        }
+    }
+    if oversized { Err("Clipboard text is too large to paste.".into()) } else { Err(empty()) }
+}
+
 /// `dirty` is the flag the `beforeunload` guard reads ([`guard_unload`]).
 fn services(ctx: egui::Context, dirty: Rc<Cell<bool>>, messages: Rc<RefCell<Vec<String>>>, intake: FileIntake) -> Services {
     let print_ctx = ctx.clone();
+    let clipboard_ctx = ctx.clone();
     let font_ctx = ctx;
     let font_messages = messages;
     Services {
+        read_browser_clipboard: Some(Box::new(move |text_only| {
+            let (send, receive) = std::sync::mpsc::channel();
+            let clipboard_ctx = clipboard_ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = send.send(read_browser_clipboard(text_only).await);
+                clipboard_ctx.request_repaint();
+            });
+            receive
+        })),
         print_async: Some(Box::new(move |bytes| print_pdf(bytes, print_ctx.clone()))),
         intake: Some(intake),
         on_dirty: Some(Box::new(move |d| dirty.set(d))),

@@ -180,6 +180,8 @@ impl WordApp {
             windows: _,
             print_document: _,
             clipboard_published: _,
+            #[cfg(target_arch = "wasm32")]
+            pending_browser_paste: _,
             // Per document: the shown document's, swapped with `parked` on a document switch.
             autosave_path: _,
             parked: _,

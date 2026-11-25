@@ -408,6 +408,8 @@ pub struct WordApp {
     pub(crate) fonts_frames: u8,
     /// Only a successfully published copy may reuse this window's private fragment.
     pub clipboard_published: bool,
+    #[cfg(target_arch = "wasm32")]
+    pending_browser_paste: Option<system_clipboard::PendingBrowserPaste>,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Which job message is current: bumped when a job starts and whenever the message changes,

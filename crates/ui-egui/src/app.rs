@@ -103,6 +103,8 @@ impl WordApp {
             command_states: Default::default(),
             fonts_frames: 0,
             clipboard_published: false,
+            #[cfg(target_arch = "wasm32")]
+            pending_browser_paste: None,
             printing: Default::default(),
             print_feedback_seen: None,
             print_gen: 0,

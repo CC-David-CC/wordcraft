@@ -79,6 +79,15 @@ impl WordApp {
         // The ribbon and context-menu Paste commands send no text: read the system clipboard's, as
         // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
         // doesn't carry (#687).
+        #[cfg(target_arch = "wasm32")]
+        if params.as_object().is_some_and(|fields| fields.is_empty())
+            && matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge")
+            && command_enabled(self, id)
+            && !system_clipboard::handle(self).is_some_and(|clipboard| clipboard.arrived())
+            && system_clipboard::request_browser_paste(self, id)
+        {
+            return Ok(json!({"pending": "browserClipboard"}));
+        }
         let mut params = params;
         if let Some(r) = system_clipboard::fill(self, id, &mut params) {
             return r;
@@ -184,7 +193,9 @@ impl WordApp {
             return r;
         }
         // The browser and the account host both complete saves through the same pending-write queue.
-        if self.browser_saves() && matches!(id, "file.save" | "file.saveAs" | "file.exportCopy" | "file.exportPdf" | "file.exportPng" | "file.printPdf") {
+        if self.browser_saves()
+            && matches!(id, "file.save" | "file.saveAs" | "file.exportCopy" | "file.exportPdf" | "file.exportPng" | "file.printPdf")
+        {
             if id == "file.exportCopy" && params.get("path").and_then(Value::as_str).is_none() {
                 return Err("Export requires a destination".into());
             }
@@ -271,7 +282,8 @@ impl WordApp {
             let rev = self.session.rev();
             let hosted = self.services.host_save.is_some();
             let ticket = if let Some(host) = self.services.host_save.as_ref() {
-                let context = crate::HostSaveContext { document, revision: rev, operation: id.into(), document_save: marked_saved, path: name.clone() };
+                let context =
+                    crate::HostSaveContext { document, revision: rev, operation: id.into(), document_save: marked_saved, path: name.clone() };
                 match host(&name, &bytes, marked_saved && new_file, &context) {
                     Ok(ticket) => ticket,
                     Err(error) => {
