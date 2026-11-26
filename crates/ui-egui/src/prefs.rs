@@ -217,7 +217,8 @@ impl Default for Prefs {
             initials: String::new(),
             options_pane: "general".into(),
             recent_count: 12,
-            mini_toolbar: true,
+            // In the browser, keep the ribbon as the default formatting surface.
+            mini_toolbar: !cfg!(target_arch = "wasm32"),
             alignment_guides: true,
             start_screen: true,
             print_backgrounds: false,
