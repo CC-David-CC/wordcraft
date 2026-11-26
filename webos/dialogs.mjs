@@ -6,6 +6,14 @@ export function canonicalPath(value, {root = false} = {}) {
   return value;
 }
 
+export function savePath(value, suggestedPath) {
+  const path = canonicalPath(value);
+  const filename = path.split('/').at(-1);
+  const suggestedName = suggestedPath.split('/').at(-1);
+  const extension = suggestedName.match(/\.[^.]+$/)?.[0] ?? '';
+  return filename.includes('.') ? path : canonicalPath(path + extension);
+}
+
 export function createDialogs({element, signal, check, onChange = () => {}, onClose = () => {}}) {
   let active = null;
   function ask(title, build) {
@@ -32,7 +40,7 @@ export function createDialogs({element, signal, check, onChange = () => {}, onCl
       return ask('Save As', ({node,body,button,finish}) => {
         node.dataset.kind = 'path'; const label = document.createElement('label'), input = document.createElement('input'), error = document.createElement('p');
         label.textContent = 'Account file path'; input.value = initial; input.required = true; input.setAttribute('aria-label','Account file path'); error.setAttribute('role','alert'); label.append(input); body.append(label,error);
-        const save = () => { try {finish(canonicalPath(input.value));} catch(e) {error.textContent=e.message;} };
+        const save = () => { try {finish(savePath(input.value,initial));} catch(e) {error.textContent=e.message;} };
         input.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();save();}});
         button('Save',null,save); button('Cancel',null);
       });
