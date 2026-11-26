@@ -39,9 +39,9 @@ fn file_page(mut a: WordApp, page: &str) -> egui_kittest::Harness<'static, WordA
 
 #[test]
 fn compact_file_shows_navigation_or_the_selected_page() {
-    let mut h = harness(new_app(), egui::vec2(411.0, 432.0));
-    h.get_by_label("File").click();
-    h.run_steps(4);
+    let mut app = new_app();
+    app.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = harness(app, egui::vec2(411.0, 432.0));
     h.get_by_label("Open").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "open");
