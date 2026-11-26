@@ -45,10 +45,18 @@ pub fn start() {
         let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
         let mut options = eframe::WebOptions::default();
-        if query().contains("webgl")
-            && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
-        {
-            create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+            if query().contains("webgl") {
+                create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
+            }
+            let device_descriptor = create.device_descriptor.clone();
+            create.device_descriptor = Arc::new(move |adapter| {
+                let mut descriptor = device_descriptor(adapter);
+                let texture_limit = adapter.limits().max_texture_dimension_2d;
+                let requested_size = &mut descriptor.required_limits.max_texture_dimension_2d;
+                *requested_size = (*requested_size).min(texture_limit);
+                descriptor
+            });
         }
         let result = eframe::WebRunner::new()
             .start(
