@@ -33,25 +33,34 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
             Button::command(CommandRef::new("ui.backstage")).label(tl!("File").to_string()).show(ui);
             Button::command(CommandRef::new("file.save")).label(tl!("Save").to_string()).show(ui);
             let more = Button::new(tl!("Tools").to_string()).show(ui);
-            Menu::new(tl!("Tools").to_string()).opened_by(&more.response, Trigger::Click).show(ui, |ui, _| {
-                for (id, label) in [
-                    ("edit.undo", tl!("Undo")),
-                    ("edit.redo", tl!("Redo")),
-                    ("format.bold", tl!("Bold")),
-                    ("format.italic", tl!("Italic")),
-                    ("format.underline", tl!("Underline")),
-                    ("edit.find", tl!("Find")),
-                ] {
-                    MenuItem::command(CommandRef::new(id)).label(label.to_string()).show(ui);
-                }
-                let label = if app.chrome.compact_paper { tl!("Wrap text to window") } else { tl!("Show print layout") };
-                if MenuItem::new(label.to_string()).show(ui).ran {
-                    app.chrome.compact_paper = !app.chrome.compact_paper;
-                }
-            });
+            // Use the button's activation so a completed touch opens the same menu as a mouse click.
+            if more.clicks > 0 {
+                app.chrome.compact_tools = !app.chrome.compact_tools;
+            }
+            let compact_paper = &mut app.chrome.compact_paper;
+            Menu::new(tl!("Tools").to_string())
+                .opened_by(&more.response, Trigger::Manual)
+                .open(Bind::bound(&mut app.chrome.compact_tools))
+                .show(ui, |ui, _| {
+                    for (id, label) in [
+                        ("edit.undo", tl!("Undo")),
+                        ("edit.redo", tl!("Redo")),
+                        ("format.bold", tl!("Bold")),
+                        ("format.italic", tl!("Italic")),
+                        ("format.underline", tl!("Underline")),
+                        ("edit.find", tl!("Find")),
+                    ] {
+                        MenuItem::command(CommandRef::new(id)).label(label.to_string()).show(ui);
+                    }
+                    let label = if *compact_paper { tl!("Wrap text to window") } else { tl!("Show print layout") };
+                    if MenuItem::new(label.to_string()).show(ui).ran {
+                        *compact_paper = !*compact_paper;
+                    }
+                });
         });
         return;
     }
+    app.chrome.compact_tools = false;
     let title = if app.has_document() {
         let state = if app.session.dirty {
             tl!("Edited")

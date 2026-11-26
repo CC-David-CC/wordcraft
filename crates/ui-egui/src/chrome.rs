@@ -16,6 +16,8 @@ pub(crate) mod title_bar;
 pub(crate) struct ChromeOpen {
     /// Show the paper at its actual size when a narrow window's user requests it.
     pub(crate) compact_paper: bool,
+    /// The Tools menu in the compact title bar.
+    pub(crate) compact_tools: bool,
     /// The Undo drop-down.
     pub(crate) undo: bool,
     /// The actions marked in the open Undo drop-down; back to none whenever the drop-down is closed.
