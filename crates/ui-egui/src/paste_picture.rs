@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 // PLAN(app-hub): the `craft` facade dependency of ui-egui (`craft::platform` = craft-platform), as in system_clipboard.rs
-use craft::platform::clipboard::ClipboardError;
+use craft::platform::clipboard::{BITMAP, ClipboardError};
 use serde_json::{Value, json};
 
 use crate::{WordApp, system_clipboard};
@@ -84,6 +84,14 @@ pub(crate) fn paste(app: &mut WordApp) -> Option<Result<Value, String>> {
     let r = match clip.read_files().ok().flatten().filter(|f| !f.is_empty()) {
         Some(files) => paste_files(app, files)?,
         None => match clip.read_image() {
+            Ok(None) if clip.arrived() => {
+                // Browser paste events carry encoded image files. The event clipboard's
+                // pixel reader only understands RGBA8, so pass the encoded file to the
+                // same bounded decoder used by Insert Picture.
+                let image = clip.read(&[BITMAP]).ok().flatten()?;
+                app.execute("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&image.data)}))
+                    .inspect_err(|error| app.status(error.clone()))
+            }
             Ok(None) => return None,
             Ok(Some(image)) => match png_from_rgba(image.width as usize, image.height as usize, image.rgba) {
                 Ok(png) => app.execute("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})),

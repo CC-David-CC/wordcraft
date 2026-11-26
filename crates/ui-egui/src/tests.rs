@@ -3617,8 +3617,11 @@ fn pasted_picture_inserts_only_when_the_page_is_the_edit_target() {
 }
 
 fn paste_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    use craft::platform::clipboard::Clipboard;
-    let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(LatePaste::default()));
+    paste_harness_with(a, craft::platform::clipboard::Clipboard::new(LatePaste::default()))
+}
+
+fn paste_harness_with(a: WordApp, clipboard: craft::platform::clipboard::Clipboard) -> egui_kittest::Harness<'static, WordApp> {
+    let spec = || crate::test_harness::install_spec().clipboard(clipboard);
     let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -3644,6 +3647,23 @@ fn a_paste_onto_the_focused_page_inserts_one_picture() {
     assert_eq!(object_count(h.state_mut()), 1);
     h.step();
     assert_eq!(object_count(h.state_mut()), 1, "once");
+}
+
+#[test]
+fn an_encoded_png_from_the_browser_clipboard_inserts_once_and_undo_removes_it() {
+    use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, PNG};
+
+    let clipboard = EventClipboard::new(|| 0, |_| Err(ClipboardError::NoFormat));
+    let offers = clipboard.late_offers();
+    let mut h = paste_harness_with(app(), Clipboard::new(clipboard));
+    let png = png_bytes([31, 78, 119, 255]);
+    offers.offer(vec![Flavor::new(PNG, png.clone())]);
+    h.run_steps(3);
+    let app = h.state_mut();
+    assert_eq!(object_count(app), 1);
+    assert!(app.session.doc.media.values().any(|bytes| bytes.as_ref() == png));
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(object_count(app), 0);
 }
 
 /// A pending Change Picture replaces the selected image instead of inserting (#147).
