@@ -3661,7 +3661,7 @@ fn an_encoded_png_from_the_browser_clipboard_inserts_once_and_undo_removes_it() 
     h.run_steps(3);
     let app = h.state_mut();
     assert_eq!(object_count(app), 1);
-    assert!(app.session.doc.media.values().any(|bytes| bytes.as_ref() == png));
+    assert!(app.session.doc.media.values().any(|bytes| bytes.as_slice() == png.as_slice()));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(object_count(app), 0);
 }
