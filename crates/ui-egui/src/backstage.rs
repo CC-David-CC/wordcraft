@@ -166,6 +166,7 @@ struct MenuChoice {
 /// document only the Home, New, Open and Options pages work. Back and Escape close it.
 pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let ctx = ui.ctx().clone();
+    let compact = crate::chrome::compact(ui);
     // No document open (#1129): only the pages that open or create one, and Options.
     let has_document = app.has_document();
     if !has_document && !works_without_document(&app.ui.backstage_page) {
@@ -189,29 +190,50 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let page_band = (band - craft::ui::contract::pad_of(&craft::ui::runtime::env::Env::of(ui).tokens, Pad::Page)).max(0.0);
     let choice = MenuChoice::default();
     let current = app.ui.backstage_page.clone();
-    // The row starts at the reading start, so the side menu is at the right in a mirrored interface.
-    let _ = Row::new().fill().show(ui, |ui, _| {
-        side_menu(ui, band, &current, has_document, &choice);
-        let print = current == "print";
-        // Stacked rows' spacing between a page's controls, as production's (Browse… over Browse in WordCraft…).
-        // The page stands on the window's background (production's `t.ribbon`, #f9f9f9 light), not the white panel,
-        // a page's margin off the window and the side menu (production's 40 pt sides, 30 pt top).
-        let mut body = Stack::new().fill().pad(Pad::Page).gap(Gap::Stack).surface(SurfaceKind::Background);
-        // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
-        if !print {
-            body = body.scroll(Scroll::vertical());
-        }
-        let _ = body.show(ui, |ui, _| {
+    if compact {
+        // A narrow File view shows one page at a time so the navigation cannot cover its contents.
+        let _ = Stack::new().fill().pad(Pad::Page).gap(Gap::Stack).show(ui, |ui, _| {
             ui.add_space(page_band);
-            page_body(ui, app, &current);
+            if current == "home" {
+                let _ = Button::command(BackstagePageCommand::Back).show(ui);
+                let _ = Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
+                    let _ = inspect::record(ui, egui::Id::unique("wordcraft-backstage-pages"), |ui| {
+                        page_rows(ui, &PAGES[1..], &current, has_document, &choice);
+                    });
+                    footer_links(ui, &choice);
+                });
+            } else {
+                if Button::new(label("Back")).show(ui).clicks > 0 {
+                    *choice.page.borrow_mut() = Some("home");
+                }
+                show_page(ui, app, &current, Pad::None, 0.0);
+            }
         });
-    });
+    } else {
+        // The row starts at the reading start, so the side menu is at the right in a mirrored interface.
+        let _ = Row::new().fill().show(ui, |ui, _| {
+            side_menu(ui, band, &current, has_document, &choice);
+            show_page(ui, app, &current, Pad::Page, page_band);
+        });
+    }
     if let Some(id) = choice.page.take() {
         go_to_page(app, id, &ctx);
     }
     if choice.about.get() {
         let _ = crate::dialogs::open(app, "about", &json!({}));
     }
+}
+
+fn show_page(ui: &mut Ui, app: &mut WordApp, page: &str, pad: Pad, page_band: f32) {
+    let mut body = Stack::new().fill().pad(pad).gap(Gap::Stack).surface(SurfaceKind::Background);
+    // Print scrolls its settings and preview within the page.
+    if page != "print" {
+        body = body.scroll(Scroll::vertical());
+    }
+    let _ = body.show(ui, |ui, _| {
+        ui.add_space(page_band);
+        page_body(ui, app, page);
+    });
 }
 
 /// The active page's body.
@@ -268,7 +290,7 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, choice: 
                     |overrides| {
                         overrides.values.set(ControlPlace::SideMenu);
                     },
-                    |ui| page_rows(ui, current, has_document, choice),
+                    |ui| page_rows(ui, &PAGES, current, has_document, choice),
                 );
             });
         });
@@ -284,8 +306,8 @@ fn footer_links(ui: &mut Ui, choice: &MenuChoice) {
 }
 
 /// The side menu's page rows, one full-width button per page.
-fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice) {
-    for (id, name, icon) in PAGES {
+fn page_rows(ui: &mut Ui, pages: &[(&'static str, &'static str, &'static str)], current: &str, has_document: bool, choice: &MenuChoice) {
+    for &(id, name, icon) in pages {
         // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
         let on = has_document || works_without_document(id);
         let row = Button::new(label(name))

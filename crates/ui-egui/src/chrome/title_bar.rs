@@ -30,7 +30,9 @@ use crate::WordApp;
 pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     if super::compact(ui) && app.has_document() {
         ui.horizontal_wrapped(|ui| {
-            Button::command(CommandRef::new("ui.backstage")).label(tl!("File").to_string()).show(ui);
+            Button::command(CommandRef::with_params("ui.backstage", json!({"value": true, "page": "home"})))
+                .label(tl!("File").to_string())
+                .show(ui);
             Button::command(CommandRef::new("file.save")).label(tl!("Save").to_string()).show(ui);
             let more = Button::new(tl!("Tools").to_string()).show(ui);
             // Use the button's activation so a completed touch opens the same menu as a mouse click.

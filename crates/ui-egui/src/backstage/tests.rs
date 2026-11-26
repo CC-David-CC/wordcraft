@@ -37,6 +37,25 @@ fn file_page(mut a: WordApp, page: &str) -> egui_kittest::Harness<'static, WordA
     harness(a, egui::vec2(1440.0, 900.0))
 }
 
+#[test]
+fn compact_file_shows_navigation_or_the_selected_page() {
+    let mut h = harness(new_app(), egui::vec2(411.0, 432.0));
+    h.get_by_label("File").click();
+    h.run_steps(4);
+    h.get_by_label("Open").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.backstage_page, "open");
+    h.get_by_label("Browse…");
+    assert!(h.query_by_label("New").is_none());
+    h.get_by_label("Back").click();
+    h.run_steps(4);
+    h.get_by_label("Save As");
+    assert!(h.query_by_label("Browse…").is_none());
+    h.get_by_label("Back").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.backstage);
+}
+
 /// A recent row by its file name. The framework names a row with its folder after the file name
 /// (`name` then the path), so a row is found by that prefix, not by the exact label.
 fn recent_row<'a>(h: &'a egui_kittest::Harness<'static, WordApp>, name: &'a str) -> Option<egui_kittest::Node<'a>> {
