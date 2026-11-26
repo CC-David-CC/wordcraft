@@ -75,18 +75,38 @@ impl WordApp {
         !self.keytips_active && !self.session.view.read_mode && paste_target(self.canvas.focused(ctx), self.ui.backstage, self.modal_open())
     }
 
-    /// Apply the browser's one-shot text and markup paste to the focused document.
+    /// Try the browser's text and markup. A remote image tag can describe a clipboard
+    /// picture without carrying its bytes. Return whether there was content to insert.
     #[cfg(target_arch = "wasm32")]
-    pub fn paste_browser_text(&mut self, ctx: &egui::Context, content: Value) {
+    pub fn paste_browser_text(&mut self, ctx: &egui::Context, content: Value) -> bool {
         if !self.document_is_paste_target(ctx) {
-            return;
+            return false;
         }
         if self.session.math.is_some() {
-            if let Some(text) = content.get("text").and_then(Value::as_str) {
-                let _ = self.run("equation.type", json!({"text": text}));
+            return content
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| self.run("equation.type", json!({"text": text})).is_ok());
+        }
+        self.run("edit.paste", content).is_ok()
+    }
+
+    /// Insert the encoded picture files using the same command as Insert Pictures.
+    #[cfg(target_arch = "wasm32")]
+    pub fn paste_browser_pictures(&mut self, ctx: &egui::Context, pictures: Vec<Vec<u8>>) {
+        if !self.document_is_paste_target(ctx) || self.session.math.is_some() {
+            return;
+        }
+        let mut pictures = pictures.into_iter().peekable();
+        while let Some(bytes) = pictures.next() {
+            let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
+            let placed = self.run("insert.picture", json!({"data": data}));
+            if let Err(error) = &placed {
+                self.status(error.clone());
             }
-        } else {
-            let _ = self.run("edit.paste", content);
+            if pictures.peek().is_some() {
+                self.caret_after_placed_picture(Self::placed_in_text(&placed));
+            }
         }
     }
 

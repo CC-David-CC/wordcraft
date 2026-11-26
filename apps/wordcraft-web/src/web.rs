@@ -2,21 +2,23 @@
 //! unsaved-changes guard and the eframe web runner.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use craft::automation::control::ControlChannel;
 use craft::host::{Files, Host, Wake};
 use craft::platform::appearance::SystemReader;
 use craft::platform::browser_files::BrowserFiles;
-use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, HTML, LateOffers, RTF, TEXT};
+use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, HTML, RTF, TEXT};
 use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
 use craft::ui::InstallSpec;
 use craft::ui::shell::embed;
 use craft::window::system::NoWindows;
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast as _;
-use wordcraft_engine::Session;
+use wordcraft_engine::{Selection, Session};
 use wordcraft_ui_egui::{Services, WordApp};
 
 mod font_store;
@@ -57,17 +59,15 @@ pub fn start() {
                         log::info!("wordcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
                     let ctx = cc.egui_ctx.clone();
-                    // The clipboard: the browser's paste event feeds it; a late paste (a picture read
-                    // asynchronously) arrives through `late_offers`. The pass clock counts frames, so a late
-                    // offer is readable in every pass of its frame.
+                    // The clipboard bridge writes text to the browser. Document paste is handled
+                    // separately so the same browser event can't insert the content twice.
                     let frame_ctx = ctx.clone();
                     let copy_ctx = ctx.clone();
                     let event_clipboard = EventClipboard::new(move || frame_ctx.cumulative_frame_nr(), move |flavors| copy_out(&copy_ctx, flavors))
                         .with_wake(waker(&ctx));
-                    let late_offers = event_clipboard.late_offers();
                     let document_paste_target = Rc::new(Cell::new(false));
-                    let pending_clipboard = Rc::new(RefCell::new(Vec::new()));
-                    if let Err(e) = listen_for_paste(late_offers, document_paste_target.clone(), pending_clipboard.clone(), ctx.clone()) {
+                    let pending_clipboard = Rc::new(RefCell::new(VecDeque::new()));
+                    if let Err(e) = listen_for_paste(document_paste_target.clone(), pending_clipboard.clone(), ctx.clone()) {
                         log::error!("browser clipboard paste is unavailable: {e}");
                     }
                     if let Err(e) = route_document_keys(document_paste_target.clone()) {
@@ -149,7 +149,7 @@ pub fn start() {
                     {
                         crate::host::Bridge::set_author(&mut app, &name);
                     }
-                    Ok(Box::new(WebShell { app, sender, messages, document_paste_target, pending_clipboard }))
+                    Ok(Box::new(WebShell { app, sender, messages, document_paste_target, pending_clipboard, pending_pictures: None }))
                 }),
             )
             .await;
@@ -197,7 +197,69 @@ struct WebShell {
     sender: IntakeSender,
     messages: Rc<RefCell<Vec<String>>>,
     document_paste_target: Rc<Cell<bool>>,
-    pending_clipboard: Rc<RefCell<Vec<Value>>>,
+    pending_clipboard: Rc<RefCell<VecDeque<BrowserPaste>>>,
+    pending_pictures: Option<PendingPictures>,
+}
+
+struct BrowserPaste {
+    text: Option<Value>,
+    pictures: Vec<web_sys::File>,
+}
+
+struct PendingPictures {
+    document: u64,
+    revision: u64,
+    selection: Selection,
+    result: Receiver<Vec<Vec<u8>>>,
+}
+
+impl WebShell {
+    /// Process each browser paste in order. Keep pictures at their original edit target if
+    /// reading the browser's files takes longer than a frame.
+    fn paste_document_clipboard(&mut self, ctx: &egui::Context) {
+        if let Some(pending) = self.pending_pictures.as_ref() {
+            let pictures = match pending.result.try_recv() {
+                Ok(pictures) => pictures,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => Vec::new(),
+            };
+            if self.app.session.document_id() == pending.document
+                && self.app.session.rev() == pending.revision
+                && self.app.session.sel == pending.selection
+            {
+                self.app.paste_browser_pictures(ctx, pictures);
+            }
+            self.pending_pictures = None;
+        }
+        while let Some(paste) = self.pending_clipboard.borrow_mut().pop_front() {
+            if !self.app.document_is_paste_target(ctx) {
+                continue;
+            }
+            if paste.text.is_some_and(|text| self.app.paste_browser_text(ctx, text)) || paste.pictures.is_empty() {
+                continue;
+            }
+            let (send, result) = mpsc::channel();
+            let ctx = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut pictures = Vec::new();
+                for picture in paste.pictures {
+                    match wasm_bindgen_futures::JsFuture::from(picture.array_buffer()).await {
+                        Ok(buffer) => pictures.push(js_sys::Uint8Array::new(&buffer).to_vec()),
+                        Err(e) => log::error!("couldn't read the pasted picture: {e:?}"),
+                    }
+                }
+                let _ = send.send(pictures);
+                ctx.request_repaint();
+            });
+            self.pending_pictures = Some(PendingPictures {
+                document: self.app.session.document_id(),
+                revision: self.app.session.rev(),
+                selection: self.app.session.sel.clone(),
+                result,
+            });
+            return;
+        }
+    }
 }
 
 impl eframe::App for WebShell {
@@ -207,9 +269,7 @@ impl eframe::App for WebShell {
         for msg in msgs {
             self.app.status(msg);
         }
-        for paste in std::mem::take(&mut *self.pending_clipboard.borrow_mut()) {
-            self.app.paste_browser_text(ctx, paste);
-        }
+        self.paste_document_clipboard(ctx);
         self.app.poll_browser_paste();
         self.app.logic(ctx);
     }
@@ -248,7 +308,7 @@ impl eframe::App for WebShell {
     }
 }
 
-/// Largest picture pasted from the browser's clipboard (as `insert.picture` allows).
+/// Total encoded picture bytes accepted from one browser clipboard event.
 const MAX_PASTED_BYTES: f64 = (200u32 << 20) as f64;
 /// Most pictures one paste inserts.
 const MAX_PASTED_PICTURES: u32 = 20;
@@ -276,16 +336,14 @@ fn route_document_keys(document_editing: Rc<Cell<bool>>) -> Result<(), String> {
     Ok(())
 }
 
-/// Move browser text and markup into the document command queue without also giving the same
-/// paste to eframe. Other fields still use eframe's ordinary paste event.
+/// Capture the browser's alternate paste representations while the event exposes them.
+/// Other fields still use eframe's ordinary paste event.
 fn listen_for_paste(
-    late: LateOffers,
     document_paste_target: Rc<Cell<bool>>,
-    pending_clipboard: Rc<RefCell<Vec<Value>>>,
+    pending_clipboard: Rc<RefCell<VecDeque<BrowserPaste>>>,
     ctx: egui::Context,
 ) -> Result<(), String> {
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
-    let late = Rc::new(late);
     let on_paste = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
         let Some(data) = e.clipboard_data() else { return };
         if !document_paste_target.get() {
@@ -300,38 +358,30 @@ fn listen_for_paste(
                     .then(|| (String::from(field), Value::String(value)))
             })
             .collect();
-        if !fields.is_empty() {
-            e.prevent_default();
-            e.stop_immediate_propagation();
+        let text = (!fields.is_empty()).then(|| {
             fields.insert("privateClipboard".into(), json!(false));
-            let mut pending = pending_clipboard.borrow_mut();
-            if pending.len() < 4 {
-                pending.push(Value::Object(fields));
-                ctx.request_repaint();
+            Value::Object(fields)
+        });
+        let mut pictures = Vec::new();
+        let mut remaining = MAX_PASTED_BYTES;
+        if let Some(files) = data.files() {
+            for i in 0..files.length().min(MAX_PASTED_PICTURES) {
+                let Some(file) = files.get(i) else { continue };
+                if file.type_().starts_with("image/") && file.size() > 0.0 && file.size() <= remaining {
+                    remaining -= file.size();
+                    pictures.push(file);
+                }
             }
+        }
+        if text.is_none() && pictures.is_empty() {
             return;
         }
-        let Some(files) = data.files() else { return };
-        for i in 0..files.length().min(MAX_PASTED_PICTURES) {
-            let Some(file) = files.get(i) else { continue };
-            if !file.type_().starts_with("image/") {
-                continue;
-            }
-            if file.size() > MAX_PASTED_BYTES {
-                log::warn!("pasted picture is larger than 200 MB; not inserted");
-                continue;
-            }
-            let late = late.clone();
-            let mime = file.type_();
-            wasm_bindgen_futures::spawn_local(async move {
-                match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-                    Ok(buf) => {
-                        let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-                        late.offer(vec![Flavor::new(mime, bytes)]);
-                    }
-                    Err(e) => log::error!("couldn't read the pasted picture: {e:?}"),
-                }
-            });
+        e.prevent_default();
+        e.stop_immediate_propagation();
+        let mut pending = pending_clipboard.borrow_mut();
+        if pending.len() < 4 {
+            pending.push_back(BrowserPaste { text, pictures });
+            ctx.request_repaint();
         }
     });
     document.add_event_listener_with_callback_and_bool("paste", on_paste.as_ref().unchecked_ref(), true).map_err(|e| format!("{e:?}"))?;
